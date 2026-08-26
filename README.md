@@ -12,12 +12,13 @@
   <sub>Windows: installer, per-user, no administrator · Linux and macOS: self-contained tarballs · <a href="https://github.com/GSteenbruggen/offthewire/releases">all releases</a></sub>
 </p>
 
-OffTheWire is a terminal-based coding agent that runs entirely on local Ollama
-models. It reads, edits, and searches code, runs tests and shell commands,
-attaches images for vision-capable models, and optionally performs web
-research — all driven by a model executing on the user's own hardware, with
-every model request terminating at `localhost`. An MCP server is included
-that exposes local model management to other tooling.
+OffTheWire brings agentic coding to your local Ollama models. It can inspect
+and modify code, run tests and shell commands, search repositories, analyze
+images, and optionally perform web research — all while inference stays on
+your own machine. Existing Ollama models are recognized automatically, so
+anything installed before OffTheWire continues working with no migration or
+reinstallation required. A bundled MCP server also exposes your local models
+to other compatible tools.
 
 **Why it exists.** <em><ins>Cloud coding agents require routing source code,
 prompts, and file contents through third-party infrastructure</ins></em>, which is unacceptable
