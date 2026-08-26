@@ -243,6 +243,74 @@ def test_session_lookup(tmp: Path) -> None:
     check("empty files are skipped", latest_session(d).stem != "empty")
 
 
+def test_multipass_compaction() -> None:
+    """A grossly oversized conversation must fold in bounded passes.
+
+    The bug class this guards: the summarisation prompt itself overflowing
+    the window (observed at 6.6x on a real 1627-message session), which
+    Ollama truncates silently -- producing a "summary" of whichever fragment
+    survived. The fake client records every prompt so the budget claim is
+    checked against what would actually go on the wire, and threads a marker
+    through the chained summaries to prove pass N sees pass N-1's output.
+    """
+    import asyncio
+
+    from session import COMPACT_PROMPT_BUDGET, MAX_COMPACT_PASSES, estimate_tokens
+
+    print("\n8. Multi-pass compaction of an oversized conversation")
+
+    tmp = Path(tempfile.mkdtemp(prefix="acct-compact-"))
+    s = new_session(tmp, limit=32768)
+    filler = "def loader(row):\n    return row * 1.07\n" * 40
+    s.append({"role": "user", "content": "codename BANANA-47, region eu-west-3"})
+    for i in range(900):
+        s.append({"role": "assistant", "content": f"working on chunk {i}",
+                  "tool_calls": [{"function": {"name": "read_file",
+                                               "arguments": {"path": f"f{i}.py"}}}]})
+        s.append({"role": "tool", "tool_name": "read_file", "content": filler})
+    check("setup is far over budget", s.usage_ratio() > 5, f"{s.usage_ratio():.1f}x")
+
+    class FakeClient:
+        def __init__(self):
+            self.prompts = []
+
+        async def generate(self, model, prompt, **kw):
+            self.prompts.append(prompt)
+            n = len(self.prompts)
+
+            class R:
+                content = f"[summary v{n}] key facts retained; based on: " + (
+                    f"summary v{n-1}" if n > 1 else "the transcript"
+                )
+                gen_tokens = 120
+                total_s = 0.5
+
+            return R()
+
+    fake = FakeClient()
+    progress = []
+    result = asyncio.run(s.compact(fake, on_progress=progress.append))
+
+    check("bounded pass count", 1 <= len(fake.prompts) <= MAX_COMPACT_PASSES,
+          f"{len(fake.prompts)} passes")
+    budget = int(32768 * COMPACT_PROMPT_BUDGET)
+    worst = max(estimate_tokens(pr) for pr in fake.prompts)
+    check("every pass prompt fits its budget", worst <= budget * 1.15,
+          f"worst {worst:,} vs budget {budget:,}")
+    if len(fake.prompts) > 1:
+        check("passes are chained, not independent",
+              "summary v1" in fake.prompts[1])
+        check("progress reported per pass", len(progress) == len(fake.prompts),
+              f"{len(progress)} notes")
+    check("conversation actually shrank", s.usage_ratio() < 1.0,
+          f"now {s.usage_ratio():.2f}x")
+    check("summary message leads the transcript",
+          "compacted" in s.messages[0]["content"].lower()
+          or "summary" in s.messages[0]["content"].lower())
+    check("result reports the pass count", "passes" in result or len(fake.prompts) == 1,
+          result[:90])
+
+
 def main() -> int:
     tmp = Path(tempfile.mkdtemp(prefix="acct-"))
     try:
@@ -256,6 +324,7 @@ def main() -> int:
         test_resume(tmp)
         test_dangling_tool_call(tmp)
         test_session_lookup(tmp)
+        test_multipass_compaction()
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
 
