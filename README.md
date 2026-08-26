@@ -13,12 +13,12 @@
 </p>
 
 OffTheWire brings agentic coding to your local Ollama models. It can inspect
-and modify code, run tests and shell commands, search repositories, analyze
+and modify code, run tests, shell commands, search repositories, analyze
 images, and optionally perform web research — all while inference stays on
 your own machine. Existing Ollama models are recognized automatically, so
 anything installed before OffTheWire continues working with no migration or
 reinstallation required. A bundled MCP server also exposes your local models
-to other compatible tools.
+to other compatible tools — check `/help` [here](#in-session-commands).
 
 **Why it exists.** <em><ins>Cloud coding agents require routing source code,
 prompts, and file contents through third-party infrastructure</ins></em>, which is unacceptable
