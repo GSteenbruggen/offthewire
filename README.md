@@ -2,6 +2,12 @@
   <img src="assets/logo.png" alt="OffTheWire" width="480">
 </p>
 
+<p align="center">
+  <a href="https://github.com/GSteenbruggen/offthewire/releases/download/v1.0.0/OffTheWire-Setup-1.0.0.exe"><strong>Download OffTheWire 1.0.0 for Windows (x64)</strong></a>
+  <br>
+  <sub>24&nbsp;MB installer · per-user, no administrator required · <a href="https://github.com/GSteenbruggen/offthewire/releases">all releases</a></sub>
+</p>
+
 OffTheWire is a terminal-based coding agent that runs entirely on local Ollama
 models. It reads, edits, and searches code, runs tests and shell commands,
 attaches images for vision-capable models, and optionally performs web
