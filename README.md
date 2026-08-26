@@ -3,11 +3,13 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/GSteenbruggen/offthewire/releases/download/v1.1.0/OffTheWire-Setup-1.1.0.exe"><strong>Download for Windows (x64)</strong></a>
+  <a href="https://github.com/GSteenbruggen/offthewire/releases/download/v1.2.0/OffTheWire-Setup-1.2.0.exe"><strong>Windows (x64)</strong></a>
   ·
-  <a href="https://github.com/GSteenbruggen/offthewire/releases/download/v1.1.0/OffTheWire-1.1.0-linux-x86_64.tar.gz"><strong>Download for Linux (x86_64)</strong></a>
+  <a href="https://github.com/GSteenbruggen/offthewire/releases/download/v1.2.0/OffTheWire-1.2.0-linux-x86_64.tar.gz"><strong>Linux (x86_64)</strong></a>
+  ·
+  <a href="https://github.com/GSteenbruggen/offthewire/releases/download/v1.2.0/OffTheWire-1.2.0-macos-arm64.tar.gz"><strong>macOS (Apple&nbsp;Silicon)</strong></a>
   <br>
-  <sub>Windows: 24&nbsp;MB installer, per-user, no administrator · Linux: 45&nbsp;MB tarball · macOS: coming soon · <a href="https://github.com/GSteenbruggen/offthewire/releases">all releases</a></sub>
+  <sub>Windows: installer, per-user, no administrator · Linux and macOS: self-contained tarballs · <a href="https://github.com/GSteenbruggen/offthewire/releases">all releases</a></sub>
 </p>
 
 OffTheWire is a terminal-based coding agent that runs entirely on local Ollama
@@ -52,9 +54,10 @@ poorly on small local ones. OffTheWire was built to close both gaps.
 .venv\Scripts\python.exe scripts\verify_offline.py
 ```
 
-**Platforms:** Windows x64 and Linux x86_64; a macOS build is planned (see
-[Roadmap](#roadmap)). Requires [Ollama](https://ollama.com/download) and a
-model with the `tools` capability.
+**Platforms:** Windows x64, Linux x86_64, and macOS (Apple Silicon).
+Requires [Ollama](https://ollama.com/download) and a model with the `tools`
+capability. The Windows build is exercised interactively; Linux and macOS
+pass the full test suite in CI — treat both as beta.
 The Windows build is exercised interactively; the Linux build passes the full
 test suite in CI and on real hardware, and is newer — treat it as beta.
 
@@ -99,9 +102,10 @@ test suite in CI and on real hardware, and is newer — treat it as beta.
 - **Terminal UI** — streaming markdown rendering, syntax-highlighted file
   previews before writes, approval prompts for mutating operations, and clean
   degradation when output is piped.
-- **Windows installer and Linux tarball** — a per-user setup executable on
-  Windows (no administrator rights), a self-contained tarball on Linux; both
-  platforms run the full test suite in CI on every push.
+- **Windows installer, Linux and macOS tarballs** — a per-user setup
+  executable on Windows (no administrator rights), self-contained tarballs
+  elsewhere; all three platforms run the full test suite in CI on every
+  push.
 
 ---
 
@@ -133,7 +137,7 @@ gigabytes; both must be installed independently.
 ### Linux
 
 ```bash
-tar -xzf OffTheWire-1.1.0-linux-x86_64.tar.gz
+tar -xzf OffTheWire-1.2.0-linux-x86_64.tar.gz
 ./OffTheWire/OffTheWire            # the current directory becomes the workspace
 ```
 
@@ -141,6 +145,24 @@ Optional extras: `wl-clipboard` (Wayland) or `xclip` (X11) enable pasting
 images from the clipboard with `Alt+V` — without one of them, images still
 attach by typed path or drag-and-drop. Web lookup uses
 `scripts/setup_searxng.sh`, which requires Docker.
+
+### macOS (Apple Silicon)
+
+```bash
+curl -LO https://github.com/GSteenbruggen/offthewire/releases/download/v1.2.0/OffTheWire-1.2.0-macos-arm64.tar.gz
+tar -xzf OffTheWire-1.2.0-macos-arm64.tar.gz
+./OffTheWire/OffTheWire
+```
+
+The build is not notarized. Downloading with `curl` (as above) avoids
+Gatekeeper's quarantine entirely; a browser download triggers it, in which
+case clear the attribute once after extracting:
+
+```bash
+xattr -dr com.apple.quarantine OffTheWire
+```
+
+Clipboard image paste works out of the box (`osascript` ships with the OS).
 
 ### From source
 
@@ -616,7 +638,7 @@ scripts/
   build_installer.ps1 application and installer build
   show_session.py     saved-session viewer
 .github/workflows/
-  ci.yml              tests on Windows and Linux; Linux build artifact
+  ci.yml              tests on Windows, Linux, macOS; tarball build artifacts
 installer/
   OffTheWire.spec        PyInstaller configuration
   OffTheWire.iss         Inno Setup configuration
@@ -637,9 +659,9 @@ application (~66 MB, ~0.4 s cold start), and Inno Setup wraps it into a
 ~25 MB installer — with a smoke test between them, so a non-functional
 bundle is never packaged. Neither tool is a runtime dependency.
 
-The Linux tarball is produced by CI (`.github/workflows/ci.yml`) on every
-version tag, from the same `.spec` file — PyInstaller cannot cross-compile,
-so each platform's binary is built on that platform. To build locally on
+The Linux and macOS tarballs are produced by CI (`.github/workflows/ci.yml`)
+on every version tag, from the same `.spec` file — PyInstaller cannot
+cross-compile, so each platform's binary is built on that platform's runner. To build locally on
 Linux:
 
 ```bash
@@ -689,8 +711,6 @@ additionally exercises the MCP server against a live Ollama instance.
   third-party MCP servers
 - Parallel tool execution within a step
 - Runtime web toggle (`/web on`) without restart
-- macOS support (the portability layer is in place; needs a macOS clipboard
-  path, CI build, and Gatekeeper distribution decisions)
 - Additional backends (LM Studio, llama.cpp) via their OpenAI-compatible
   APIs
 
