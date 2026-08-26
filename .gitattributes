@@ -1,0 +1,13 @@
+# Normalize line endings: LF in the repository, native on checkout.
+# Without this, a repo built on Windows ships CRLF to Linux/macOS cloners and
+# every diff tool flags whole-file changes that are nothing but line endings.
+* text=auto
+
+# PowerShell is the one place CRLF is the correct on-disk form everywhere:
+# some Windows PowerShell 5.1 parsing quirks (and signed-script hashing)
+# assume it.
+*.ps1 text eol=crlf
+
+# Never touch binaries.
+*.png binary
+*.exe binary

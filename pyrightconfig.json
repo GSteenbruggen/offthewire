@@ -1,0 +1,6 @@
+{
+  "_comment": "src/ modules import each other flatly and add their own dir to sys.path at runtime. This tells the editor's type checker the same thing so it stops reporting unresolved imports.",
+  "extraPaths": ["src"],
+  "venvPath": ".",
+  "venv": ".venv"
+}

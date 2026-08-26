@@ -1,0 +1,6 @@
+# Build-time only. Not needed to run the agent, and nothing here is imported by
+# src/ -- see scripts/build_installer.ps1.
+#
+# Inno Setup is the other half of the toolchain and is not a Python package:
+#   winget install --id JRSoftware.InnoSetup
+pyinstaller>=6.0
