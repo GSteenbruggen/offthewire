@@ -19,10 +19,12 @@ than a frontier one:
 
 from __future__ import annotations
 
+import asyncio
 import fnmatch
 import inspect
 import os
 import re
+import signal
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
@@ -250,14 +252,47 @@ def build_tools(ws: Workspace) -> list[Tool]:
         capped = " (capped)" if len(hits) >= MAX_GREP_HITS else ""
         return _truncate(f"{len(hits)} match(es){capped}:\n" + "\n".join(hits))
 
-    def run_command(command: str) -> str:
-        """Run a shell command in the workspace root.
+    async def run_command(command: str) -> str:
+        """Run a shell command in the workspace root, without blocking the loop.
 
-        On Windows, ``shell=True`` runs cmd.exe, which has none of the POSIX
+        On Windows, a bare shell would be cmd.exe, which has none of the POSIX
         utilities models reach for by default -- an observed run died on
         ``tail -5``. PowerShell at least provides equivalents, so we route
         there and tell the model so in the tool description.
+
+        Async, not ``subprocess.run``: the blocking version parked the entire
+        event loop for up to SHELL_TIMEOUT seconds, during which Ctrl+C could
+        not be processed at all -- a hung install froze the program with no
+        exit but killing it. As a task this can be cancelled, and cancellation
+        (or timeout) kills the whole process *tree*, because the direct child
+        is a shell whose children would otherwise keep running orphaned.
         """
+
+        async def kill_tree(proc: "asyncio.subprocess.Process") -> None:
+            if proc.returncode is not None:
+                return
+            try:
+                if IS_WINDOWS:
+                    # taskkill /T is the only reliable tree kill on Windows;
+                    # proc.kill() would take down powershell and leave its
+                    # children running.
+                    killer = await asyncio.create_subprocess_exec(
+                        "taskkill", "/F", "/T", "/PID", str(proc.pid),
+                        stdout=asyncio.subprocess.DEVNULL,
+                        stderr=asyncio.subprocess.DEVNULL,
+                    )
+                    await killer.wait()
+                else:
+                    # start_new_session below made the shell a process-group
+                    # leader, so the group id is its pid.
+                    os.killpg(proc.pid, signal.SIGKILL)
+            except (OSError, ProcessLookupError):
+                pass
+            try:
+                await proc.wait()
+            except Exception:
+                pass
+
         try:
             if IS_WINDOWS:
                 # Two Windows-specific corrections, both observed breaking real
@@ -269,8 +304,8 @@ def build_tools(ws: Workspace) -> list[Tool]:
                 #    token". The call operator `&` makes it a command again.
                 #    The model is told to use a full interpreter path, so it
                 #    quotes one often.
-                # 2. The default locale here is cp1252, so text=True mangles any
-                #    non-ASCII output into mojibake -- which the model then
+                # 2. The default locale here is cp1252, so decoded output would
+                #    mangle any non-ASCII into mojibake -- which the model then
                 #    cannot read, and starts flailing. Force UTF-8 on both sides.
                 cmd = command.lstrip()
                 if cmd.startswith(('"', "'")):
@@ -279,37 +314,41 @@ def build_tools(ws: Workspace) -> list[Tool]:
                     "[Console]::OutputEncoding=[Text.Encoding]::UTF8; "
                     "$OutputEncoding=[Text.Encoding]::UTF8; "
                 )
-                proc = subprocess.run(
-                    [
-                        "powershell", "-NoProfile", "-NonInteractive",
-                        "-Command", prelude + cmd,
-                    ],
+                proc = await asyncio.create_subprocess_exec(
+                    "powershell", "-NoProfile", "-NonInteractive",
+                    "-Command", prelude + cmd,
                     cwd=str(ws.root),
-                    capture_output=True,
-                    text=True,
-                    encoding="utf-8",
-                    errors="replace",
-                    timeout=SHELL_TIMEOUT,
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE,
                 )
             else:
-                proc = subprocess.run(
+                proc = await asyncio.create_subprocess_shell(
                     command,
-                    shell=True,
                     cwd=str(ws.root),
-                    capture_output=True,
-                    text=True,
-                    encoding="utf-8",
-                    errors="replace",
-                    timeout=SHELL_TIMEOUT,
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE,
+                    start_new_session=True,
                 )
-        except subprocess.TimeoutExpired:
-            raise ToolError(f"Command timed out after {SHELL_TIMEOUT}s: {command}")
         except FileNotFoundError as e:
             raise ToolError(f"Shell not available: {e}")
 
-        out = (proc.stdout or "") + (
-            f"\n[stderr]\n{proc.stderr}" if proc.stderr.strip() else ""
-        )
+        try:
+            stdout_b, stderr_b = await asyncio.wait_for(
+                proc.communicate(), timeout=SHELL_TIMEOUT
+            )
+        except asyncio.TimeoutError:
+            await kill_tree(proc)
+            raise ToolError(f"Command timed out after {SHELL_TIMEOUT}s: {command}")
+        except asyncio.CancelledError:
+            # The user interrupted the turn. The command must die with it --
+            # a cancelled await that leaves the process running turns Ctrl+C
+            # into a lie.
+            await kill_tree(proc)
+            raise
+
+        stdout = stdout_b.decode("utf-8", errors="replace")
+        stderr = stderr_b.decode("utf-8", errors="replace")
+        out = stdout + (f"\n[stderr]\n{stderr}" if stderr.strip() else "")
         status = "" if proc.returncode == 0 else f"[exit {proc.returncode}]\n"
         return _truncate(status + (out.strip() or "(no output)"))
 

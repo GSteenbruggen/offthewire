@@ -33,6 +33,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 logging.getLogger("httpx").setLevel(logging.WARNING)
 
 import images as IM  # noqa: E402
+from _version import __version__  # noqa: E402
 import models as M  # noqa: E402
 import paths  # noqa: E402
 from ollama_client import GenResult, NonLocalHostError, OllamaClient  # noqa: E402
@@ -808,7 +809,41 @@ class Agent:
                     f"it stays in context; /clear when you are done with it"
                 )
 
+        # Without --save, a clipboard paste has now served its purpose: the
+        # bytes are in memory (Attachment.data) and go on the wire from there.
+        # Leaving the temp file behind would break the "nothing on disk unless
+        # you ask" promise one screenshot at a time. Only files this program
+        # wrote into its own paste directory are removed -- a path the user
+        # typed or dragged is theirs, regardless of where it lives.
+        if not self.save:
+            for ref in found.refs:
+                try:
+                    if self.images_dir in ref.parents:
+                        ref.unlink(missing_ok=True)
+                except OSError:
+                    pass
+
         return found.render([a.path for a in attachments]), attachments
+
+    def cleanup_temp_pastes(self) -> None:
+        """Remove the temp paste directory on exit when not saving.
+
+        Catches what per-turn cleanup cannot: an image pasted with Alt+V whose
+        marker was edited out of the line before submitting is never loaded,
+        so it is never unlinked above. Guarded twice -- only in no-save mode,
+        and only when the directory really is under the system temp dir, so a
+        bug here can never reach sessions/pasted.
+        """
+        if self.save:
+            return
+        import shutil
+
+        target = self.images_dir
+        try:
+            if Path(tempfile.gettempdir()).resolve() in target.resolve().parents:
+                shutil.rmtree(target, ignore_errors=True)
+        except OSError:
+            pass
 
     # ---------------------------------------------------------------- a turn
 
@@ -850,7 +885,7 @@ class Agent:
             if self.session.needs_compaction() and compactions_this_turn < 2:
                 compactions_this_turn += 1
                 print(f"{YELLOW}  context {self.session.budget_line()} -- compacting{RESET}")
-                print(f"{DIM}  {await self.session.compact(self.client)}{RESET}")
+                print(f"{DIM}  {await self.session.compact(self.client, on_progress=ui.note)}{RESET}")
                 # Compaction summarizes older turns away, which can take the
                 # environment block with it. Re-inject on the next turn.
                 self._env_injected = False
@@ -897,6 +932,7 @@ class Agent:
                 return
             except Exception as e:
                 printer.finish()
+                logging.getLogger(__name__).exception("model call failed")
                 ui.error(f"model call failed: {type(e).__name__}: {e}")
                 return
             finally:
@@ -970,20 +1006,27 @@ class Agent:
                     output = "ERROR: the user declined this action. Try a different approach or ask them."
                     ui.denied(name)
                 else:
+                    # Run the tool as a task with the interrupter armed, the
+                    # same arrangement the model call gets. Ctrl+C then cancels
+                    # the task rather than raising into arbitrary bytecode --
+                    # and cancellation is what lets run_command kill its
+                    # process tree instead of orphaning a hung install. The
+                    # call still gets an answer below either way, because an
+                    # assistant message whose tool_calls have no results is
+                    # exactly the dangling state that derails the next turn.
+                    tool_task = asyncio.create_task(self.tools.call(name, raw_args))
+                    self.interrupter.arm(tool_task)
                     try:
-                        output = await self.tools.call(name, raw_args)
-                    except KeyboardInterrupt:
-                        # Ctrl+C landed while the tool was running -- the
-                        # interrupter only guards the model call. The call
-                        # still gets an answer below, because an assistant
-                        # message whose tool_calls have no results is exactly
-                        # the dangling state that derails the next turn.
+                        output = await tool_task
+                    except (asyncio.CancelledError, KeyboardInterrupt):
                         output = (
                             "ERROR: the user interrupted this call before it "
                             "finished. Do not assume it ran. Wait for their "
                             "next instruction."
                         )
                         interrupted = True
+                    finally:
+                        self.interrupter.disarm()
                     ui.tool_result(output)
                     if not interrupted:
                         tool = self.tools.get(name)
@@ -1099,6 +1142,7 @@ async def repl(agent: Agent) -> None:
         image_dir=agent.images_dir,
     )
     ui.banner(
+        version=__version__,
         model=agent.model,
         workspace=agent.workspace.root,
         ctx=agent.context_length,
@@ -1255,7 +1299,7 @@ async def repl(agent: Agent) -> None:
             elif cmd == "tokens":
                 print(f"{DIM}{agent.session.budget_line()}, {agent.session.compactions} compaction(s){RESET}")
             elif cmd == "compact":
-                print(f"{DIM}{await agent.session.compact(agent.client)}{RESET}")
+                print(f"{DIM}{await agent.session.compact(agent.client, on_progress=ui.note)}{RESET}")
             elif cmd == "history":
                 if not agent.session.messages:
                     print(f"{DIM}nothing yet in this session{RESET}")
@@ -1329,6 +1373,15 @@ async def repl(agent: Agent) -> None:
 
 async def main() -> int:
     ap = argparse.ArgumentParser(description="Offline coding agent on local Ollama models.")
+    ap.add_argument(
+        "--version", action="version", version=f"OffTheWire {__version__}"
+    )
+    ap.add_argument(
+        "--debug",
+        action="store_true",
+        help="Write a detailed local log for bug reports. The log never leaves "
+        "this machine; the path is printed at startup.",
+    )
     ap.add_argument("workspace", nargs="?", default=".", help="Directory the agent may work in.")
     ap.add_argument("--model", help="Skip the picker and use this model.")
     ap.add_argument("--context", type=int, default=DEFAULT_CONTEXT, help="Context window in tokens.")
@@ -1382,6 +1435,29 @@ async def main() -> int:
         help=f"SearXNG base URL, default {DEFAULT_SEARXNG}.",
     )
     args = ap.parse_args()
+
+    if args.debug:
+        log_dir = paths.data_dir() / "logs"
+        log_dir.mkdir(parents=True, exist_ok=True)
+        log_path = log_dir / time.strftime("debug-%Y%m%d-%H%M%S.log")
+        logging.basicConfig(
+            filename=str(log_path),
+            level=logging.DEBUG,
+            format="%(asctime)s %(levelname)-7s %(name)s: %(message)s",
+        )
+        # httpx request lines are exactly what a bug report needs; they were
+        # silenced for the terminal, not for a file nobody sees unasked.
+        logging.getLogger("httpx").setLevel(logging.DEBUG)
+        logging.getLogger(__name__).info("OffTheWire %s starting", __version__)
+        # Unhandled crashes land in the log with a full traceback, not just
+        # in a terminal that has scrolled away by the time anyone asks.
+        def _hook(exc_type, exc, tb):
+            logging.getLogger(__name__).critical(
+                "unhandled exception", exc_info=(exc_type, exc, tb)
+            )
+            sys.__excepthook__(exc_type, exc, tb)
+        sys.excepthook = _hook
+        print(f"{DIM}debug log: {log_path}{RESET}")
 
     try:
         client = OllamaClient()
@@ -1486,12 +1562,15 @@ async def main() -> int:
             return 2
         print(f"{GREEN}{agent.load_session(path)}{RESET}")
 
-    if args.prompt:
-        await agent.run_turn(args.prompt)
-        return 0
+    try:
+        if args.prompt:
+            await agent.run_turn(args.prompt)
+            return 0
 
-    await repl(agent)
-    return 0
+        await repl(agent)
+        return 0
+    finally:
+        agent.cleanup_temp_pastes()
 
 
 if __name__ == "__main__":

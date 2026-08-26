@@ -122,7 +122,7 @@ def rule_char() -> str:
 
 
 def banner(model: str, workspace: Path, ctx: int, tools: list[str], session: str,
-           input_note: str, web: str | None) -> None:
+           input_note: str, web: str | None, version: str = "") -> None:
     """The welcome box: what you are talking to, and where it can reach.
 
     Boxed rather than listed because it is the one thing on screen that is not
@@ -141,6 +141,8 @@ def banner(model: str, workspace: Path, ctx: int, tools: list[str], session: str
     body = Text()
     body.append(f"{SPARK} ", style="accent")
     body.append("offthewire", style="head")
+    if version:
+        body.append(f" v{version}", style="meta")
     body.append("  ")
     body.append(model, style="accent")
     body.append("\n\n")

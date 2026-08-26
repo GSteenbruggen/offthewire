@@ -3,11 +3,11 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/GSteenbruggen/offthewire/releases/download/v1.2.0/OffTheWire-Setup-1.2.0.exe"><strong>Windows (x64)</strong></a>
+  <a href="https://github.com/GSteenbruggen/offthewire/releases/download/v1.3.0/OffTheWire-Setup-1.3.0.exe"><strong>Windows (x64)</strong></a>
   ·
-  <a href="https://github.com/GSteenbruggen/offthewire/releases/download/v1.2.0/OffTheWire-1.2.0-linux-x86_64.tar.gz"><strong>Linux (x86_64)</strong></a>
+  <a href="https://github.com/GSteenbruggen/offthewire/releases/download/v1.3.0/OffTheWire-1.3.0-linux-x86_64.tar.gz"><strong>Linux (x86_64)</strong></a>
   ·
-  <a href="https://github.com/GSteenbruggen/offthewire/releases/download/v1.2.0/OffTheWire-1.2.0-macos-arm64.tar.gz"><strong>macOS (Apple&nbsp;Silicon)</strong></a>
+  <a href="https://github.com/GSteenbruggen/offthewire/releases/download/v1.3.0/OffTheWire-1.3.0-macos-arm64.tar.gz"><strong>macOS (Apple&nbsp;Silicon)</strong></a>
   <br>
   <sub>Windows: installer, per-user, no administrator · Linux and macOS: self-contained tarballs · <a href="https://github.com/GSteenbruggen/offthewire/releases">all releases</a></sub>
 </p>
@@ -136,7 +136,7 @@ gigabytes; both must be installed independently.
 ### Linux
 
 ```bash
-tar -xzf OffTheWire-1.2.0-linux-x86_64.tar.gz
+tar -xzf OffTheWire-1.3.0-linux-x86_64.tar.gz
 ./OffTheWire/OffTheWire            # the current directory becomes the workspace
 ```
 
@@ -148,8 +148,8 @@ attach by typed path or drag-and-drop. Web lookup uses
 ### macOS (Apple Silicon)
 
 ```bash
-curl -LO https://github.com/GSteenbruggen/offthewire/releases/download/v1.2.0/OffTheWire-1.2.0-macos-arm64.tar.gz
-tar -xzf OffTheWire-1.2.0-macos-arm64.tar.gz
+curl -LO https://github.com/GSteenbruggen/offthewire/releases/download/v1.3.0/OffTheWire-1.3.0-macos-arm64.tar.gz
+tar -xzf OffTheWire-1.3.0-macos-arm64.tar.gz
 ./OffTheWire/OffTheWire
 ```
 
@@ -694,6 +694,9 @@ Notes:
 .venv\Scripts\python.exe scripts\test_environment.py   # environment probing
 .venv\Scripts\python.exe scripts\test_interrupt.py     # interrupt handling
 .venv\Scripts\python.exe scripts\test_ask.py           # clarifying-question tool
+.venv\Scripts\python.exe scripts\test_tools.py         # workspace confinement, command kill-tree
+.venv\Scripts\python.exe scripts\test_models.py        # VRAM-aware model selection
+.venv\Scripts\python.exe scripts\test_docs.py          # /help-vs-README and version drift
 .venv\Scripts\python.exe scripts\verify_offline.py     # containment verification
 ```
 

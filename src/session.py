@@ -248,7 +248,7 @@ class Session:
             chunks.append(current)
         return chunks
 
-    async def compact(self, client: Any) -> str:
+    async def compact(self, client: Any, on_progress: Any = None) -> str:
         """Summarize older turns using the local model, in place.
 
         Thinking is off: this is a mechanical summarization, and on a local
@@ -290,6 +290,12 @@ class Session:
         gen_tokens = 0
         elapsed = 0.0
         for i, chunk in enumerate(chunks, 1):
+            # Each pass is a full model call -- tens of seconds locally. Five
+            # of them with nothing on screen is indistinguishable from a hang,
+            # which is exactly the failure mode this module exists to prevent
+            # showing up elsewhere.
+            if on_progress and len(chunks) > 1:
+                on_progress(f"compaction pass {i}/{len(chunks)}…")
             if summary:
                 head = (
                     "Here are notes on the earlier part of a coding session:\n\n"

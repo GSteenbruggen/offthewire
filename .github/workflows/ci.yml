@@ -45,7 +45,7 @@ jobs:
         run: |
           set -e
           for t in test_images test_accounting test_repl_input test_environment \
-                   test_ask test_websearch test_interrupt verify_offline; do
+                   test_ask test_websearch test_interrupt test_tools \n                   test_models test_docs verify_offline; do
             echo "===== $t ====="
             python scripts/$t.py
           done
@@ -118,3 +118,51 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: gh release upload "${GITHUB_REF_NAME}" "$TARBALL" --clobber
+
+  # A real agent turn against a real Ollama with a small model -- the only
+  # place the full loop (capability probe, system prompt, generation) runs on
+  # Linux and macOS at all. Master pushes only: model downloads are the
+  # flakiest step in this file, and a registry hiccup must not block a
+  # release tag whose code already passed this job on the same commit.
+  e2e:
+    needs: test
+    if: github.ref == 'refs/heads/master'
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install runtime dependencies
+        run: python -m pip install --disable-pip-version-check -r requirements.txt
+      - name: Install Ollama
+        shell: bash
+        run: |
+          if [ "$RUNNER_OS" = "macOS" ]; then
+            brew install --quiet ollama
+          else
+            curl -fsSL https://ollama.com/install.sh | sh
+          fi
+      - name: Cache model
+        uses: actions/cache@v4
+        with:
+          path: ~/.ollama/models
+          key: ollama-qwen3-0.6b-${{ runner.os }}
+      - name: Start Ollama and pull a small tool-capable model
+        shell: bash
+        run: |
+          ollama serve &
+          for i in $(seq 1 30); do
+            curl -fsS http://localhost:11434/api/tags >/dev/null 2>&1 && break
+            sleep 1
+          done
+          ollama pull qwen3:0.6b
+      - name: Run one real agent turn
+        shell: bash
+        run: |
+          python src/agent.py . --model qwen3:0.6b --think never --yes             --max-steps 3 --prompt "Reply with exactly the single word: pong"             | tee turn.log
+          grep -qi "pong" turn.log

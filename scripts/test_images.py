@@ -355,8 +355,56 @@ def test_uri_list() -> None:
     check("missing files are ignored", IM._path_from_uri_list(missing.encode()) is None)
 
 
+def test_temp_pastes_do_not_outlive_the_turn() -> None:
+    """Without --save, a clipboard paste is disk residue the moment its bytes
+    are in memory. The product promise is 'nothing on disk unless you ask',
+    and a screenshot in %TEMP% breaks it as surely as a transcript would."""
+    from agent import Agent
+    from ollama_client import OllamaClient
+    from tools import Workspace
+
+    print("\n7. Temp pastes do not outlive the turn")
+
+    ws = Workspace(str(TMP))
+    client = OllamaClient()
+
+    # --- save OFF: the pasted file is consumed, then removed
+    agent = Agent(client, "m", ws, interactive=False, save=False, supports_vision=True)
+    agent.images_dir.mkdir(parents=True, exist_ok=True)
+    pasted = agent.images_dir / "pasted-test.png"
+    pasted.write_bytes(sample_png())
+
+    # A file the user referenced by path, sitting anywhere else, is theirs.
+    user_file = TMP / "users own.png"
+    user_file.write_bytes(sample_png())
+
+    text, atts = agent._attach_images(f'{IM.marker(pasted)} versus "{user_file}"')
+    check("both images attached", len(atts) == 2, text)
+    check("bytes are in memory", all(len(a.data) > 0 for a in atts))
+    check("pasted temp file removed", not pasted.exists())
+    check("user's own file untouched", user_file.exists())
+
+    # An orphaned paste (marker edited out, never attached) goes at exit.
+    orphan = agent.images_dir / "pasted-orphan.png"
+    orphan.write_bytes(sample_png())
+    agent.cleanup_temp_pastes()
+    check("orphaned paste swept on exit", not orphan.exists())
+
+    # --- save ON: pastes are part of the record and must survive
+    saver = Agent(client, "m", ws, interactive=False, save=True, supports_vision=True)
+    saver.session.sessions_dir = TMP / "kept-sessions"
+    kept_dir = saver.images_dir
+    kept_dir.mkdir(parents=True, exist_ok=True)
+    kept = kept_dir / "pasted-keep.png"
+    kept.write_bytes(sample_png())
+    saver._attach_images(IM.marker(kept))
+    check("with --save the paste is kept", kept.exists())
+    saver.cleanup_temp_pastes()
+    check("exit sweep never touches saved pastes", kept.exists())
+
+
 def test_clipboard() -> None:
-    print("\n7. Clipboard")
+    print("\n8. Clipboard")
     if sys.platform == "win32":
         check("available on Windows", IM.clipboard_available() is True)
     elif sys.platform.startswith("linux"):
@@ -436,6 +484,7 @@ def main() -> int:
     test_persistence()
     test_not_saved_by_default()
     test_uri_list()
+    test_temp_pastes_do_not_outlive_the_turn()
     test_clipboard()
 
     print("\n" + "=" * 70)

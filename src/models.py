@@ -200,17 +200,72 @@ async def recommend_agent_model(client: OllamaClient) -> dict[str, Any]:
             "candidates": [],
         }
 
-    candidates.sort(key=lambda c: c["size_bytes"], reverse=True)
-    best = candidates[0]
+    best, why = choose_candidate(candidates, total_vram_bytes())
     return {
         "recommended": best["name"],
         "reason": (
             f"{best['parameters']} {best['quantization']}, "
             f"max context {best['max_context']}, "
-            f"thinking={'yes' if best['supports_thinking'] else 'no'}"
+            f"thinking={'yes' if best['supports_thinking'] else 'no'}{why}"
         ),
         "candidates": [
             {k: c[k] for k in ("name", "size", "parameters", "max_context")}
-            for c in candidates
+            for c in sorted(candidates, key=lambda c: c["size_bytes"], reverse=True)
         ],
     }
+
+
+def choose_candidate(
+    candidates: list[dict[str, Any]], vram: int | None
+) -> tuple[dict[str, Any], str]:
+    """Pick the model to recommend, VRAM permitting.
+
+    The docstring above always promised "the largest that still plausibly fits
+    in VRAM"; until this function existed the code simply took the largest,
+    which on a small card recommends the one model guaranteed to run mostly on
+    CPU. Fitting is weights plus headroom for the KV cache and compositor.
+
+    When nothing fits, the *smallest* spills least, so it wins -- the exact
+    inverse of the no-information order. With no VRAM reading at all (non-NVIDIA
+    GPU, no nvidia-smi), the old largest-first behaviour stands, because
+    guessing a number would be worse than admitting we do not have one.
+    """
+    by_size = sorted(candidates, key=lambda c: c["size_bytes"], reverse=True)
+    if not vram:
+        return by_size[0], ""
+
+    fitting = [c for c in by_size if c["size_bytes"] + VRAM_HEADROOM_BYTES <= vram]
+    if fitting:
+        best = fitting[0]
+        return best, f", fits in {human_bytes(vram)} VRAM"
+    smallest = by_size[-1]
+    return smallest, (
+        f"; NOTE: no installed model fits this GPU's {human_bytes(vram)} — "
+        f"picked the smallest to minimize CPU spill"
+    )
+
+
+def total_vram_bytes() -> int | None:
+    """Total VRAM of the largest GPU, or None when it cannot be read.
+
+    nvidia-smi is the only probe: AMD and Apple report through interfaces this
+    project has no test hardware for, and a wrong VRAM number silently skews
+    the recommendation, which is worse than falling back to size order.
+    """
+    import subprocess
+
+    try:
+        proc = subprocess.run(
+            ["nvidia-smi", "--query-gpu=memory.total", "--format=csv,noheader,nounits"],
+            capture_output=True, text=True, timeout=5,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    if proc.returncode != 0:
+        return None
+    readings = []
+    for line in proc.stdout.splitlines():
+        line = line.strip()
+        if line.isdigit():
+            readings.append(int(line) * 1024 * 1024)  # MiB -> bytes
+    return max(readings) if readings else None
