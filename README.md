@@ -14,20 +14,24 @@
 
 OffTheWire brings agentic coding to your local Ollama models. It can inspect
 and modify code, run tests, shell commands, search repositories, analyze
-images, and optionally perform web research — all while inference stays on
-your own machine. Existing Ollama models are recognized automatically, so
+images, and optionally perform web research — <em><ins>all while inference
+stays on your own machine</ins></em>. Existing Ollama models are recognized
+automatically, so
 anything installed before OffTheWire continues working with no migration or
 reinstallation required. A bundled MCP server also exposes your local models
 to other compatible tools — check `/help` [here](#in-session-commands).
 
-**Why it exists.** <em><ins>Cloud coding agents require routing source code,
-prompts, and file contents through third-party infrastructure</ins></em>, which is unacceptable
-for proprietary codebases, regulated environments, and air-gapped machines.
-The usual alternative — pointing a general-purpose agent harness at a local
-model — fails in practice for two reasons: privacy becomes a configuration
-option rather than a property (one changed setting or environment variable
-re-enables egress), and harnesses designed for frontier cloud models perform
-poorly on small local ones. OffTheWire was built to close both gaps.
+**Why it exists.** A local model is only one part of a truly local coding
+workflow. General-purpose agent frameworks may still depend on cloud
+services, telemetry, external APIs, or configuration choices that can
+unintentionally reintroduce network access. They are also commonly optimized
+for frontier-scale models, which can make them inefficient or unreliable when
+paired with smaller local models. OffTheWire was designed specifically for
+this environment: local execution is treated as a system-level constraint,
+and the agent is tuned around the realities of Ollama models running on
+consumer and workstation hardware. The result is a coding agent built for
+environments where privacy, control, and independence from the cloud are
+first-class requirements.
 
 **How it differs from similar tools:**
 
