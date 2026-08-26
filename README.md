@@ -59,8 +59,6 @@ poorly on small local ones. OffTheWire was built to close both gaps.
 Requires [Ollama](https://ollama.com/download) and a model with the `tools`
 capability. The Windows build is exercised interactively; Linux and macOS
 pass the full test suite in CI — treat both as beta.
-The Windows build is exercised interactively; the Linux build passes the full
-test suite in CI and on real hardware, and is newer — treat it as beta.
 
 ---
 
@@ -242,7 +240,7 @@ Anything that does not begin with `/` is sent to the model as a request.
 | `/env` | Show what the model has been told about the environment. |
 | `/paste` | Attach the image on the clipboard (equivalent to `Alt+V`). |
 | `/folder [path]` | Show or change the directory the agent works in. |
-| `/web` | Show internet lookup status and the queries made this session. |
+| `/web [on\|off]` | Toggle internet lookup without restarting; bare `/web` shows status and the queries made this session. |
 | `/maxtokens [n]` | Show or change the context window (accepts `65536`, `64k`, `128K`). |
 | `/maxsteps [n]` | Show or change the tool-call limit per turn. |
 | `/tokens` | Show current context usage. |
@@ -711,7 +709,6 @@ additionally exercises the MCP server against a live Ollama instance.
 - MCP client support in the agent, for consuming `server.py` and
   third-party MCP servers
 - Parallel tool execution within a step
-- Runtime web toggle (`/web on`) without restart
 - Additional backends (LM Studio, llama.cpp) via their OpenAI-compatible
   APIs
 

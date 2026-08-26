@@ -573,8 +573,23 @@ class Agent:
         new_root = self.workspace.change_root(target)  # ValueError if invalid
 
         self.static_facts = probe_static(new_root)
+        self._rebuild_system_prompt()
+        # The old snapshot described the old folder; force the full volatile
+        # block for the new one onto the next turn.
+        self._env_injected = False
+        self._env_snapshot = {}
+
+        return f"Successfully moved to {new_root}"
+
+    def _rebuild_system_prompt(self) -> None:
+        """Recompute the system prompt from current workspace and web state.
+
+        Invalidates Ollama's cached prefix, so the next turn reprocesses the
+        whole conversation once. Every caller should say so to the user; none
+        should do this casually mid-loop.
+        """
         self.session.system_prompt = SYSTEM_PROMPT.format(
-            workspace=new_root,
+            workspace=self.workspace.root,
             environment=static_block(self.static_facts),
             web_guidance=(
                 WEB_GUIDANCE
@@ -582,12 +597,61 @@ class Agent:
                 else NO_WEB_GUIDANCE
             ),
         )
-        # The old snapshot described the old folder; force the full volatile
-        # block for the new one onto the next turn.
-        self._env_injected = False
-        self._env_snapshot = {}
 
-        return f"Successfully moved to {new_root}"
+    async def set_web(self, on: bool) -> str:
+        """Enable or disable internet lookup mid-session.
+
+        Three things move together, exactly as at startup: the WebSearch
+        enabled flag (which every web call checks), the tool registry (so the
+        schema sent with the next request gains or loses the tools -- schemas
+        are re-sent per request, so this takes effect immediately), and the
+        system prompt's guidance block (so the model is told how to treat
+        search results, or that it has no internet). The prompt change costs a
+        one-time reprocess of the cached conversation prefix, the same price
+        /folder pays.
+        """
+        if self.web is None:
+            return "no web backend configured"
+
+        if on == self.web.enabled:
+            return f"web lookup is already {'on' if on else 'off'}"
+
+        self.web.enabled = on
+        if on and self.tools.get("search_web") is None:
+            self.tools.add_web_tools(self.web)
+        elif not on:
+            # Removed, not left to fail: a registered-but-refusing tool wastes
+            # whole turns on a slow local model.
+            self.tools.remove("search_web")
+            self.tools.remove("fetch_url")
+
+        self._rebuild_system_prompt()
+        self.session.tool_overhead_tokens = estimate_tokens(
+            json.dumps(self.tools.ollama_schemas())
+        )
+
+        if not on:
+            return (
+                "web lookup OFF — tools deregistered. "
+                "(system prompt changed: one-time cache reprocess on the next turn)"
+            )
+
+        # Mirror the --web startup check: say plainly whether the backend is
+        # actually there, rather than letting the first search discover it.
+        status = await self.web.status()
+        if status.get("searxng_reachable"):
+            where = f"web lookup ON via {self.web.searxng_url}"
+        else:
+            script = "setup_searxng.ps1" if os.name == "nt" else "setup_searxng.sh"
+            where = (
+                f"web lookup ON, but SearXNG is not reachable at "
+                f"{self.web.searxng_url} — searches will fail until it is up "
+                f"(scripts/{script}, Docker must be running)"
+            )
+        return (
+            f"{where}. "
+            "(system prompt changed: one-time cache reprocess on the next turn)"
+        )
 
     def reset_conversation(self) -> str:
         """Start a genuinely fresh conversation.
@@ -1007,7 +1071,7 @@ HELP = f"""{BOLD}commands{RESET}
   /env               what the model has been told about this machine
   /paste             attach the image on the clipboard (or press Alt+V)
   /folder [path]     show or change the directory the agent works in
-  /web               internet lookup status and queries made this session
+  /web [on|off]      toggle internet lookup; bare /web shows status and queries
   /maxtokens [n]     show or change the context window, e.g. /maxtokens 64k
   /maxsteps [n]      show or change the tool-call limit per turn
   /tokens            context usage right now
@@ -1149,7 +1213,11 @@ async def repl(agent: Agent) -> None:
                     prefill = IM.marker(path) + " "
                     ui.note(f"attached {path.name} — now type your message")
             elif cmd == "web":
-                if agent.web is None:
+                if arg in ("on", "off"):
+                    print(f"{DIM}{await agent.set_web(arg == 'on')}{RESET}")
+                elif arg:
+                    ui.error(f"unknown: {arg!r} — /web, /web on, or /web off")
+                elif agent.web is None:
                     print(f"{DIM}no web backend configured{RESET}")
                 else:
                     print(json.dumps(await agent.web.status(), indent=2))

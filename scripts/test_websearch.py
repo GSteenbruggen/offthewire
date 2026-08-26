@@ -148,6 +148,52 @@ def test_private_network_refusal() -> None:
     asyncio.run(run())
 
 
+def test_runtime_toggle() -> None:
+    """/web on and /web off must move three things together: the enabled
+    flag, the tool registry, and the system prompt's guidance block. Moving
+    fewer than all three produces a model that can call tools it was never
+    told about, or is told about tools that no longer exist."""
+    import asyncio
+    import tempfile
+
+    from agent import Agent
+    from ollama_client import OllamaClient
+    from tools import Workspace
+    from websearch import WebSearch
+
+    print("\n4. Runtime web toggle")
+
+    ws = Workspace(tempfile.mkdtemp(prefix="otw-toggle-"))
+    client = OllamaClient()  # loopback-only construction; no traffic here
+    web = WebSearch(client, "m", enabled=False, searxng_url="http://localhost:1")
+    agent = Agent(client, "m", ws, web=web, interactive=False)
+
+    check("starts with web off", "search_web" not in agent.tools.names)
+    check("prompt says no internet", "no internet access" in agent.session.system_prompt)
+    overhead_off = agent.session.tool_overhead_tokens
+
+    async def run() -> None:
+        msg = await agent.set_web(True)
+        check("reports the unreachable backend", "not reachable" in msg, msg)
+        check("tools registered", "search_web" in agent.tools.names
+              and "fetch_url" in agent.tools.names)
+        check("prompt gains web guidance", "search_web" in agent.session.system_prompt)
+        check("flag is on", web.enabled is True)
+        check("tool overhead grew", agent.session.tool_overhead_tokens > overhead_off)
+
+        check("double-enable is a no-op",
+              "already" in await agent.set_web(True))
+
+        msg = await agent.set_web(False)
+        check("off deregisters", "search_web" not in agent.tools.names)
+        check("prompt loses web guidance",
+              "no internet access" in agent.session.system_prompt)
+        check("flag is off", web.enabled is False)
+        check("overhead shrank back", agent.session.tool_overhead_tokens == overhead_off)
+
+    asyncio.run(run())
+
+
 def main() -> int:
     print("=" * 68)
     print("WEB LOOKUP LOGIC TESTS")
@@ -155,6 +201,7 @@ def main() -> int:
     test_non_answer_detection()
     test_source_ranking()
     test_private_network_refusal()
+    test_runtime_toggle()
     print("\n" + "=" * 68)
     print("All web lookup tests passed." if not failures else f"{failures} FAILED.")
     print("=" * 68)

@@ -562,7 +562,7 @@ class WebSearch:
             "queries_this_session": len(self.queries_made),
         }
         if not self.enabled:
-            info["note"] = "Web access is off. Start the agent with --web to enable."
+            info["note"] = "Web access is off. /web on (or --web at startup) enables it."
             return info
         try:
             async with httpx.AsyncClient(timeout=5.0) as c:

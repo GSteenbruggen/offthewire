@@ -440,6 +440,15 @@ class ToolRegistry:
     def get(self, name: str) -> Tool | None:
         return self._tools.get(name)
 
+    def remove(self, name: str) -> None:
+        """Deregister a tool so it stops appearing in the wire schema.
+
+        Exists for /web off: a tool left registered but failing wastes whole
+        turns on a slow local model, because the model has no way to know the
+        calls are pointless until each one returns an error.
+        """
+        self._tools.pop(name, None)
+
     @property
     def names(self) -> list[str]:
         return list(self._tools)
