@@ -7,7 +7,7 @@
   ·
   <a href="https://github.com/GSteenbruggen/offthewire/releases/download/v1.1.0/OffTheWire-1.1.0-linux-x86_64.tar.gz"><strong>Download for Linux (x86_64)</strong></a>
   <br>
-  <sub>Windows: 24&nbsp;MB installer, per-user, no administrator · Linux: 31&nbsp;MB tarball · <a href="https://github.com/GSteenbruggen/offthewire/releases">all releases</a></sub>
+  <sub>Windows: 24&nbsp;MB installer, per-user, no administrator · Linux: 45&nbsp;MB tarball · macOS: coming soon · <a href="https://github.com/GSteenbruggen/offthewire/releases">all releases</a></sub>
 </p>
 
 OffTheWire is a terminal-based coding agent that runs entirely on local Ollama
@@ -52,8 +52,9 @@ poorly on small local ones. OffTheWire was built to close both gaps.
 .venv\Scripts\python.exe scripts\verify_offline.py
 ```
 
-**Platforms:** Windows x64 and Linux x86_64. Requires
-[Ollama](https://ollama.com/download) and a model with the `tools` capability.
+**Platforms:** Windows x64 and Linux x86_64; a macOS build is planned (see
+[Roadmap](#roadmap)). Requires [Ollama](https://ollama.com/download) and a
+model with the `tools` capability.
 The Windows build is exercised interactively; the Linux build passes the full
 test suite in CI and on real hardware, and is newer — treat it as beta.
 
