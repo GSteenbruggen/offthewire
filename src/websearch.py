@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import asyncio
 import ipaddress
+import os
 import socket
 from dataclasses import dataclass
 from typing import Any
@@ -225,9 +226,10 @@ class WebSearch:
                 r.raise_for_status()
                 data = r.json()
         except httpx.ConnectError:
+            script = "setup_searxng.ps1" if os.name == "nt" else "setup_searxng.sh"
             raise WebSearchError(
                 f"Cannot reach SearXNG at {self.searxng_url}. Start it with "
-                f"scripts\\setup_searxng.ps1 (Docker Desktop must be running)."
+                f"scripts/{script} (Docker must be running)."
             )
         except httpx.TimeoutException:
             # Must come before the catch-all: an earlier version funneled

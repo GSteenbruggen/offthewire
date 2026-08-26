@@ -1381,15 +1381,16 @@ async def main() -> int:
             # Name the copy of the script this user actually has. From an
             # installed build "scripts\setup_searxng.ps1" is a path to nothing,
             # so the one instruction the message gave could not be followed.
+            script = "setup_searxng.ps1" if os.name == "nt" else "setup_searxng.sh"
             setup = paths.install_root() / (
-                "setup_searxng.ps1" if paths.is_frozen()
-                else Path("scripts") / "setup_searxng.ps1"
+                script if paths.is_frozen() else str(Path("scripts") / script)
             )
-            how = (
-                f'powershell -ExecutionPolicy Bypass -File "{setup}"'
-                if setup.is_file()
-                else "scripts\\setup_searxng.ps1 from the project source"
-            )
+            if not setup.is_file():
+                how = f"scripts/{script} from the project source"
+            elif os.name == "nt":
+                how = f'powershell -ExecutionPolicy Bypass -File "{setup}"'
+            else:
+                how = f'bash "{setup}"'
             print(
                 f"{YELLOW}Web access requested but SearXNG is not reachable at "
                 f"{args.searxng}.{RESET}\n"

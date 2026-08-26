@@ -8,6 +8,10 @@
 # assume it.
 *.ps1 text eol=crlf
 
+# The mirror image: bash rejects CRLF scripts outright ("\r: command not
+# found"), and a Windows checkout under text=auto would produce exactly that.
+*.sh text eol=lf
+
 # Never touch binaries.
 *.png binary
 *.exe binary

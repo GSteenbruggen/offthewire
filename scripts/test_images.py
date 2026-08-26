@@ -329,9 +329,47 @@ def test_not_saved_by_default() -> None:
     check("and the content is there", "keep me" in saved.path.read_text(encoding="utf-8"))
 
 
+def test_uri_list() -> None:
+    """text/uri-list is Linux's CF_HDROP: file managers put file:// URIs on
+    the clipboard when a file is copied. Pure parsing, testable anywhere."""
+    print("\n6. URI-list parsing (Linux clipboard file-copy)")
+
+    img = TMP / "uri target.png"
+    img.write_bytes(sample_png())
+    uri = "file://" + str(img).replace("\\", "/").replace(" ", "%20")
+    if not uri.startswith("file:///"):
+        uri = uri.replace("file://", "file:///")
+
+    found = IM._path_from_uri_list(f"# comment line\r\n{uri}\r\n".encode())
+    check("file URI with escaped space resolves", found == img, str(found))
+    check("comments are skipped", IM._path_from_uri_list(b"# only a comment\n") is None)
+    check(
+        "non-file schemes are ignored",
+        IM._path_from_uri_list(b"https://example.com/a.png\n") is None,  # offline-fixture
+    )
+    check(
+        "non-image files are ignored",
+        IM._path_from_uri_list(b"file:///etc/hostname\n") is None,
+    )
+    missing = "file:///" + str(TMP / "no-such.png").replace("\\", "/")
+    check("missing files are ignored", IM._path_from_uri_list(missing.encode()) is None)
+
+
 def test_clipboard() -> None:
-    print("\n6. Clipboard")
-    check("availability is reported honestly", IM.clipboard_available() == (sys.platform == "win32"))
+    print("\n7. Clipboard")
+    if sys.platform == "win32":
+        check("available on Windows", IM.clipboard_available() is True)
+    elif sys.platform.startswith("linux"):
+        import shutil
+
+        helpers = bool(shutil.which("wl-paste") or shutil.which("xclip"))
+        check(
+            "availability tracks helper binaries",
+            IM.clipboard_available() == helpers,
+            f"helpers={helpers}",
+        )
+    else:
+        check("unsupported platforms say so", IM.clipboard_available() is False)
     if not IM.clipboard_available():
         print("       (not Windows -- clipboard paste is unavailable by design)")
         return
@@ -356,6 +394,7 @@ def main() -> int:
     test_extraction()
     test_persistence()
     test_not_saved_by_default()
+    test_uri_list()
     test_clipboard()
 
     print("\n" + "=" * 70)

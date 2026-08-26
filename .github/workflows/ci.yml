@@ -1,0 +1,83 @@
+# Test on both supported platforms, then produce the Linux build.
+#
+# The runners are the project's only Mac/Linux hardware, so this workflow is
+# not a formality: for every platform except Windows it is the build machine.
+# PyInstaller cannot cross-compile, which is why the Linux tarball comes from
+# ubuntu-latest and the Windows installer is built locally with Inno Setup.
+
+name: CI
+
+on:
+  push:
+    branches: [master]
+    tags: ["v*"]
+  pull_request:
+
+env:
+  # The suites print box-drawing and marker glyphs; the Windows runner pipes
+  # stdout through cp1252 without this and dies on the first ⏺.
+  PYTHONIOENCODING: utf-8
+  PYTHONUTF8: "1"
+
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install runtime dependencies
+        run: python -m pip install --disable-pip-version-check -r requirements.txt
+      - name: Run test suites
+        # bash on both runners (git-bash on Windows): set -e makes the first
+        # failing suite fail the job instead of being masked by later ones.
+        shell: bash
+        run: |
+          set -e
+          for t in test_images test_accounting test_repl_input test_environment \
+                   test_ask test_websearch test_interrupt verify_offline; do
+            echo "===== $t ====="
+            python scripts/$t.py
+          done
+
+  build-linux:
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install dependencies
+        run: |
+          python -m pip install --disable-pip-version-check -r requirements.txt
+          python -m pip install --disable-pip-version-check pyinstaller
+      - name: Build
+        working-directory: installer
+        run: python -m PyInstaller --noconfirm OffTheWire.spec
+      - name: Smoke test
+        # An app that cannot start is not worth shipping; --help exercises the
+        # whole import graph without needing Ollama.
+        run: installer/dist/OffTheWire/OffTheWire --help
+      - name: Package
+        run: |
+          VERSION=$(grep -oP 'AppVersion\s+"\K[0-9.]+' installer/OffTheWire.iss)
+          tar -czf "OffTheWire-${VERSION}-linux-x86_64.tar.gz" \
+              -C installer/dist OffTheWire
+          echo "TARBALL=OffTheWire-${VERSION}-linux-x86_64.tar.gz" >> "$GITHUB_ENV"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux-build
+          path: ${{ env.TARBALL }}
+      - name: Attach to release
+        # Only when the push is a version tag: the tarball joins the Windows
+        # installer on the release page.
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload "${GITHUB_REF_NAME}" "$TARBALL" --clobber

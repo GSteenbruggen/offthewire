@@ -45,8 +45,10 @@ for package in ("trafilatura", "dateparser", "babel", "courlan", "htmldate"):
 hiddenimports += collect_submodules("dateparser.data")
 
 a = Analysis(
-    ["..\\src\\agent.py"],
-    pathex=["..\\src"],
+    # Forward slashes: PyInstaller accepts them on Windows, and this same spec
+    # builds the Linux tarball, where backslashes are just filename characters.
+    ["../src/agent.py"],
+    pathex=["../src"],
     binaries=binaries,
     datas=datas,
     hiddenimports=hiddenimports,

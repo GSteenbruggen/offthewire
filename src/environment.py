@@ -102,6 +102,19 @@ def _os_name() -> str:
     never bumped. The build number is the only reliable discriminator, and 11
     starts at 22000.
     """
+    if sys.platform.startswith("linux"):
+        # "Ubuntu 24.04" tells the model which package manager and paths to
+        # expect; "Linux 6.8.0-49-generic" tells it almost nothing.
+        try:
+            text = Path("/etc/os-release").read_text(encoding="utf-8")
+            for line in text.splitlines():
+                if line.startswith("PRETTY_NAME="):
+                    return line.split("=", 1)[1].strip().strip('"')
+        except OSError:
+            pass
+        return f"Linux {platform.release()}"
+    if sys.platform == "darwin":
+        return f"macOS {platform.mac_ver()[0] or platform.release()}"
     if not IS_WINDOWS:
         return f"{platform.system()} {platform.release()}"
     try:

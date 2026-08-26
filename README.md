@@ -3,9 +3,11 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/GSteenbruggen/offthewire/releases/download/v1.0.0/OffTheWire-Setup-1.0.0.exe"><strong>Download OffTheWire 1.0.0 for Windows (x64)</strong></a>
+  <a href="https://github.com/GSteenbruggen/offthewire/releases/download/v1.0.0/OffTheWire-Setup-1.0.0.exe"><strong>Download for Windows (x64)</strong></a>
+  ·
+  <a href="https://github.com/GSteenbruggen/offthewire/releases/download/v1.0.0/OffTheWire-1.0.0-linux-x86_64.tar.gz"><strong>Download for Linux (x86_64)</strong></a>
   <br>
-  <sub>24&nbsp;MB installer · per-user, no administrator required · <a href="https://github.com/GSteenbruggen/offthewire/releases">all releases</a></sub>
+  <sub>Windows: 24&nbsp;MB installer, per-user, no administrator · Linux: 31&nbsp;MB tarball · <a href="https://github.com/GSteenbruggen/offthewire/releases">all releases</a></sub>
 </p>
 
 OffTheWire is a terminal-based coding agent that runs entirely on local Ollama
@@ -50,8 +52,10 @@ poorly on small local ones. OffTheWire was built to close both gaps.
 .venv\Scripts\python.exe scripts\verify_offline.py
 ```
 
-**Platform:** Windows x64. Requires [Ollama](https://ollama.com/download) and a
-model with the `tools` capability.
+**Platforms:** Windows x64 and Linux x86_64. Requires
+[Ollama](https://ollama.com/download) and a model with the `tools` capability.
+The Windows build is exercised interactively; the Linux build passes the full
+test suite in CI and on real hardware, and is newer — treat it as beta.
 
 ---
 
@@ -94,8 +98,9 @@ model with the `tools` capability.
 - **Terminal UI** — streaming markdown rendering, syntax-highlighted file
   previews before writes, approval prompts for mutating operations, and clean
   degradation when output is piped.
-- **Windows installer** — a per-user setup executable that requires no
-  administrator rights.
+- **Windows installer and Linux tarball** — a per-user setup executable on
+  Windows (no administrator rights), a self-contained tarball on Linux; both
+  platforms run the full test suite in CI on every push.
 
 ---
 
@@ -124,6 +129,18 @@ The installer does not bundle Ollama or any model. Ollama is a separate
 product with its own installer and update channel, and models are tens of
 gigabytes; both must be installed independently.
 
+### Linux
+
+```bash
+tar -xzf OffTheWire-1.0.0-linux-x86_64.tar.gz
+./OffTheWire/OffTheWire            # the current directory becomes the workspace
+```
+
+Optional extras: `wl-clipboard` (Wayland) or `xclip` (X11) enable pasting
+images from the clipboard with `Alt+V` — without one of them, images still
+attach by typed path or drag-and-drop. Web lookup uses
+`scripts/setup_searxng.sh`, which requires Docker.
+
 ### From source
 
 ```powershell
@@ -139,11 +156,24 @@ python -m venv .venv
 .venv\Scripts\python.exe src\agent.py C:\path\to\project
 ```
 
+```bash
+# Linux
+git clone https://github.com/GSteenbruggen/offthewire
+cd offthewire
+python3 -m venv .venv
+.venv/bin/pip install -r requirements.txt
+.venv/bin/python scripts/verify_offline.py    # verify containment
+.venv/bin/python src/agent.py ~/path/to/project
+```
+
 To install a global `OffTheWire` command without modifying environment
 variables:
 
 ```powershell
 .\scripts\install_launcher.ps1            # -Name <alias> to rename, -Uninstall to remove
+```
+```bash
+./scripts/install_launcher.sh             # Linux: --name <alias>, --uninstall
 ```
 
 This writes a launcher shim into `%LOCALAPPDATA%\Microsoft\WindowsApps`,
@@ -383,7 +413,12 @@ Disabled unless the agent is started with `--web`. Adds two tools —
 and therefore subject to approval.
 
 ```powershell
-.\scripts\setup_searxng.ps1          # one-time setup; requires Docker Desktop
+.\scripts\setup_searxng.ps1     # Windows; requires Docker Desktop
+```
+```bash
+./scripts/setup_searxng.sh      # Linux; requires Docker
+```
+```
 OffTheWire --web
 ```
 
@@ -573,10 +608,14 @@ scripts/
   smoke_test.py       MCP server end-to-end test (requires Ollama)
   benchmark.py        throughput and reasoning-cost measurement
   test_*.py           regression suites (no network required)
-  setup_searxng.ps1   SearXNG container setup (requires Docker)
+  setup_searxng.ps1   SearXNG container setup, Windows (requires Docker)
+  setup_searxng.sh    SearXNG container setup, Linux
+  install_launcher.sh PATH launcher installation, Linux
   install_launcher.ps1  PATH launcher installation
   build_installer.ps1 application and installer build
   show_session.py     saved-session viewer
+.github/workflows/
+  ci.yml              tests on Windows and Linux; Linux build artifact
 installer/
   OffTheWire.spec        PyInstaller configuration
   OffTheWire.iss         Inno Setup configuration
@@ -596,6 +635,17 @@ The build runs in two stages — PyInstaller produces a one-directory
 application (~66 MB, ~0.4 s cold start), and Inno Setup wraps it into a
 ~25 MB installer — with a smoke test between them, so a non-functional
 bundle is never packaged. Neither tool is a runtime dependency.
+
+The Linux tarball is produced by CI (`.github/workflows/ci.yml`) on every
+version tag, from the same `.spec` file — PyInstaller cannot cross-compile,
+so each platform's binary is built on that platform. To build locally on
+Linux:
+
+```bash
+.venv/bin/pip install pyinstaller
+cd installer && ../.venv/bin/python -m PyInstaller OffTheWire.spec
+tar -czf OffTheWire-linux-x86_64.tar.gz -C dist OffTheWire
+```
 
 Notes:
 
@@ -638,6 +688,8 @@ additionally exercises the MCP server against a live Ollama instance.
   third-party MCP servers
 - Parallel tool execution within a step
 - Runtime web toggle (`/web on`) without restart
+- macOS support (the portability layer is in place; needs a macOS clipboard
+  path, CI build, and Gatekeeper distribution decisions)
 - Additional backends (LM Studio, llama.cpp) via their OpenAI-compatible
   APIs
 

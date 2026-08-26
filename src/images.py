@@ -486,7 +486,98 @@ def dib_to_png(dib: bytes) -> bytes:
 
 
 def clipboard_available() -> bool:
-    return sys.platform == "win32"
+    """Whether an image can plausibly be read off this machine's clipboard.
+
+    Windows has a first-party API. Linux needs a helper binary -- wl-paste
+    under Wayland, xclip under X11 -- so availability there means "one of
+    those is installed", which is also the actionable thing to tell someone
+    when neither is.
+    """
+    if sys.platform == "win32":
+        return True
+    if sys.platform.startswith("linux"):
+        import shutil
+
+        return bool(shutil.which("wl-paste") or shutil.which("xclip"))
+    return False
+
+
+def _path_from_uri_list(data: bytes) -> Path | None:
+    """First local image path in a text/uri-list payload, if any.
+
+    Copying a file in a Linux file manager puts file:// URIs on the clipboard,
+    the moral equivalent of Windows' CF_HDROP. Lines starting with '#' are
+    comments per RFC 2483.
+    """
+    from urllib.parse import unquote, urlparse
+
+    for raw in data.decode("utf-8", errors="replace").splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue
+        parsed = urlparse(line)
+        if parsed.scheme != "file":
+            continue
+        raw_path = unquote(parsed.path)
+        # A drive-letter URI (file:///C:/x) parses as "/C:/x" -- the leading
+        # slash is a URL artifact, not part of the path. Only ever true on
+        # Windows-shaped paths, so stripping it is a no-op everywhere else.
+        if len(raw_path) > 2 and raw_path[0] == "/" and raw_path[2] == ":":
+            raw_path = raw_path[1:]
+        p = Path(raw_path)
+        if p.suffix.lower() in IMAGE_EXTENSIONS and p.is_file():
+            return p
+    return None
+
+
+def _read_linux_clipboard() -> tuple[str, bytes] | None:
+    """Return ("png"|"file", payload) for whatever image the clipboard holds.
+
+    Tries wl-paste (Wayland) before xclip (X11): on a Wayland session xclip
+    talks to XWayland's separate clipboard, which is usually stale or empty,
+    so the order matters more than it looks.
+    """
+    import shutil
+    import subprocess
+
+    def run(argv: list[str]) -> bytes | None:
+        try:
+            proc = subprocess.run(argv, capture_output=True, timeout=5)
+        except (OSError, subprocess.TimeoutExpired):
+            return None
+        return proc.stdout if proc.returncode == 0 else None
+
+    if shutil.which("wl-paste"):
+        targets_cmd = ["wl-paste", "--list-types"]
+        png_cmd = ["wl-paste", "--type", "image/png"]
+        uri_cmd = ["wl-paste", "--type", "text/uri-list"]
+    elif shutil.which("xclip"):
+        targets_cmd = ["xclip", "-selection", "clipboard", "-o", "-t", "TARGETS"]
+        png_cmd = ["xclip", "-selection", "clipboard", "-o", "-t", "image/png"]
+        uri_cmd = ["xclip", "-selection", "clipboard", "-o", "-t", "text/uri-list"]
+    else:
+        raise ImageError(
+            "reading an image from the clipboard needs wl-paste (Wayland) or "
+            "xclip (X11). Install one: sudo apt install wl-clipboard  (or xclip)"
+        )
+
+    targets_raw = run(targets_cmd)
+    if targets_raw is None:
+        # The tool exists but cannot reach a clipboard -- an SSH session or a
+        # server with no display. Distinct from "no image", which is None below.
+        raise ImageError(
+            "the clipboard is not accessible (no graphical session?)"
+        )
+    targets = targets_raw.decode("utf-8", errors="replace")
+
+    if "image/png" in targets:
+        if data := run(png_cmd):
+            return "png", data
+    if "text/uri-list" in targets:
+        if (data := run(uri_cmd)) is not None:
+            if path := _path_from_uri_list(data):
+                return "file", str(path).encode("utf-8")
+    return None
 
 
 def _read_windows_clipboard() -> tuple[str, bytes] | None:
@@ -595,10 +686,15 @@ def grab_clipboard(directory: Path) -> Path | None:
     ImageError when there *is* an image but it cannot be converted, because
     then there is something specific to tell the user.
     """
-    if not clipboard_available():
-        raise ImageError("clipboard images are only supported on Windows here")
-
-    found = _read_windows_clipboard()
+    if sys.platform == "win32":
+        found = _read_windows_clipboard()
+    elif sys.platform.startswith("linux"):
+        found = _read_linux_clipboard()  # raises with an install hint if bare
+    else:
+        raise ImageError(
+            "clipboard images are not supported on this platform yet; attach "
+            "the image by path or drag the file into the terminal instead"
+        )
     if found is None:
         return None
     kind, payload = found
