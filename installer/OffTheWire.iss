@@ -20,7 +20,7 @@
 ; page checks for Ollama and says plainly what is missing.
 
 #define AppName        "OffTheWire"
-#define AppVersion     "1.0.0"
+#define AppVersion     "1.1.0"
 #define AppPublisher   "Gerri"
 #define AppExe         "OffTheWire.exe"
 ; Overridable with ISCC /DSourceDir=<absolute path>, which build_installer.ps1

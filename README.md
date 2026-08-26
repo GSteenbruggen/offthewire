@@ -3,9 +3,9 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/GSteenbruggen/offthewire/releases/download/v1.0.0/OffTheWire-Setup-1.0.0.exe"><strong>Download for Windows (x64)</strong></a>
+  <a href="https://github.com/GSteenbruggen/offthewire/releases/download/v1.1.0/OffTheWire-Setup-1.1.0.exe"><strong>Download for Windows (x64)</strong></a>
   ·
-  <a href="https://github.com/GSteenbruggen/offthewire/releases/download/v1.0.0/OffTheWire-1.0.0-linux-x86_64.tar.gz"><strong>Download for Linux (x86_64)</strong></a>
+  <a href="https://github.com/GSteenbruggen/offthewire/releases/download/v1.1.0/OffTheWire-1.1.0-linux-x86_64.tar.gz"><strong>Download for Linux (x86_64)</strong></a>
   <br>
   <sub>Windows: 24&nbsp;MB installer, per-user, no administrator · Linux: 31&nbsp;MB tarball · <a href="https://github.com/GSteenbruggen/offthewire/releases">all releases</a></sub>
 </p>
@@ -132,7 +132,7 @@ gigabytes; both must be installed independently.
 ### Linux
 
 ```bash
-tar -xzf OffTheWire-1.0.0-linux-x86_64.tar.gz
+tar -xzf OffTheWire-1.1.0-linux-x86_64.tar.gz
 ./OffTheWire/OffTheWire            # the current directory becomes the workspace
 ```
 
