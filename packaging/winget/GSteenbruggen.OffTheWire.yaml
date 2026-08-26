@@ -1,0 +1,31 @@
+# winget singleton manifest for OffTheWire.
+#
+# Submission: fork microsoft/winget-pkgs, place this file at
+#   manifests/g/GSteenbruggen/OffTheWire/1.3.0/GSteenbruggen.OffTheWire.yaml
+# and open a pull request -- or run `wingetcreate submit` against it.
+# The InstallerSha256 below is the actual hash of the published v1.3.0 asset.
+PackageIdentifier: GSteenbruggen.OffTheWire
+PackageVersion: 1.3.0
+PackageLocale: en-US
+Publisher: GSteenbruggen
+PackageName: OffTheWire
+License: MIT
+LicenseUrl: https://github.com/GSteenbruggen/offthewire/blob/master/LICENSE
+ShortDescription: Offline coding agent for local Ollama models - verifiably contained, nothing leaves your machine.
+PackageUrl: https://github.com/GSteenbruggen/offthewire
+Moniker: offthewire
+Tags:
+  - ai
+  - agent
+  - ollama
+  - llm
+  - offline
+  - privacy
+Installers:
+  - Architecture: x64
+    InstallerType: inno
+    InstallerUrl: https://github.com/GSteenbruggen/offthewire/releases/download/v1.3.0/OffTheWire-Setup-1.3.0.exe
+    InstallerSha256: 3C1603B5F46CE9F6AC8EA7F7DE04FE9BB265556134C035CE803FAD7CC427200B
+    Scope: user
+ManifestType: singleton
+ManifestVersion: 1.6.0
