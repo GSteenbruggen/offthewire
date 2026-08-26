@@ -7,6 +7,11 @@
 
 name: CI
 
+# The default workflow token is read-only; attaching a release asset needs
+# write. Granted at the top and consumed only by the release step.
+permissions:
+  contents: write
+
 on:
   push:
     branches: [master]
