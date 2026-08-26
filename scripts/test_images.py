@@ -368,8 +368,49 @@ def test_clipboard() -> None:
             IM.clipboard_available() == helpers,
             f"helpers={helpers}",
         )
+    elif sys.platform == "darwin":
+        check("available on macOS (osascript ships with the OS)",
+              IM.clipboard_available() is True)
+        _macos_round_trip()
     else:
         check("unsupported platforms say so", IM.clipboard_available() is False)
+
+
+def _macos_round_trip() -> None:
+    """Put a known PNG on the real pasteboard, read it back through our code.
+
+    This is the one place the AppleScript hex-dump parsing is actually
+    exercised, and it needs real macOS -- which in this project means the CI
+    runner. A pasteboard that cannot be written (some hardened CI images) is
+    reported and skipped rather than failed: that is a property of the
+    machine, not of this code.
+    """
+    import subprocess
+
+    png_file = TMP / "clip source.png"
+    png_file.write_bytes(sample_png())
+    posix = str(png_file)
+
+    setter = subprocess.run(
+        ["osascript", "-e",
+         f'set the clipboard to (read (POSIX file "{posix}") as «class PNGf»)'],
+        capture_output=True, text=True, timeout=15,
+    )
+    if setter.returncode != 0:
+        print(f"       (pasteboard not writable here; skipping round-trip: "
+              f"{setter.stderr.strip()[:80]})")
+        return
+
+    got = IM.grab_clipboard(TMP / "pasted")
+    check("round-trip returns a file", got is not None, str(got))
+    if got is not None:
+        data = got.read_bytes()
+        check("round-trip payload is PNG", IM.sniff(data) == "png")
+        check(
+            "round-trip pixels survive",
+            IM.dimensions(data, "png") == (4, 3),
+            str(IM.dimensions(data, "png")),
+        )
     if not IM.clipboard_available():
         print("       (not Windows -- clipboard paste is unavailable by design)")
         return

@@ -499,6 +499,9 @@ def clipboard_available() -> bool:
         import shutil
 
         return bool(shutil.which("wl-paste") or shutil.which("xclip"))
+    if sys.platform == "darwin":
+        # osascript ships with the OS; there is nothing to install.
+        return True
     return False
 
 
@@ -577,6 +580,86 @@ def _read_linux_clipboard() -> tuple[str, bytes] | None:
         if (data := run(uri_cmd)) is not None:
             if path := _path_from_uri_list(data):
                 return "file", str(path).encode("utf-8")
+    return None
+
+
+def _read_macos_clipboard() -> tuple[str, bytes] | None:
+    """Return ("png"|"file", payload) for whatever image the clipboard holds.
+
+    macOS has no dedicated CLI for image clipboard data, but ``osascript``
+    always exists, and AppleScript can hand back the pasteboard's PNG flavor
+    as a hex dump: ``the clipboard as «class PNGf»`` prints
+    ``«data PNGf89504E47...»``. Parsing that hex is the standard trick; it is
+    ugly, and it is also the only dependency-free route.
+
+    A file copied in Finder is on the pasteboard as a file URL (``furl``),
+    the moral equivalent of Windows' CF_HDROP -- checked first because it
+    needs no decoding at all.
+    """
+    import subprocess
+
+    def script(src: str) -> str | None:
+        try:
+            proc = subprocess.run(
+                ["osascript", "-e", src],
+                capture_output=True, text=True, timeout=10,
+            )
+        except (OSError, subprocess.TimeoutExpired):
+            return None
+        return proc.stdout.strip() if proc.returncode == 0 else None
+
+    info = script("clipboard info")
+    if info is None:
+        raise ImageError("the clipboard is not accessible")
+
+    # A copied file: resolve it in place.
+    if "furl" in info:
+        posix = script("POSIX path of (the clipboard as «class furl»)")
+        if posix:
+            p = Path(posix)
+            if p.suffix.lower() in IMAGE_EXTENSIONS and p.is_file():
+                return "file", str(p).encode("utf-8")
+
+    if "PNGf" not in info and "TIFF" not in info:
+        return None
+
+    # Screenshots carry a PNG flavor; ask for it directly.
+    dump = script("the clipboard as «class PNGf»")
+    if dump and dump.startswith("«data PNGf") and dump.endswith("»"):
+        try:
+            data = bytes.fromhex(dump[len("«data PNGf"):-1])
+        except ValueError:
+            data = b""
+        if sniff(data) == "png":
+            return "png", data
+
+    # TIFF-only clipboards (some apps): dump the TIFF and convert with sips,
+    # which also ships with the OS.
+    dump = script("the clipboard as «class TIFF»")
+    if dump and dump.startswith("«data TIFF") and dump.endswith("»"):
+        try:
+            tiff = bytes.fromhex(dump[len("«data TIFF"):-1])
+        except ValueError:
+            return None
+        import subprocess
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as td:
+            src_p = Path(td) / "clip.tiff"
+            dst_p = Path(td) / "clip.png"
+            src_p.write_bytes(tiff)
+            try:
+                subprocess.run(
+                    ["sips", "-s", "format", "png", str(src_p), "--out", str(dst_p)],
+                    capture_output=True, timeout=15, check=True,
+                )
+            except Exception:
+                raise ImageError(
+                    "the clipboard holds a TIFF image that could not be converted"
+                )
+            data = dst_p.read_bytes()
+        if sniff(data) == "png":
+            return "png", data
     return None
 
 
@@ -690,6 +773,8 @@ def grab_clipboard(directory: Path) -> Path | None:
         found = _read_windows_clipboard()
     elif sys.platform.startswith("linux"):
         found = _read_linux_clipboard()  # raises with an install hint if bare
+    elif sys.platform == "darwin":
+        found = _read_macos_clipboard()
     else:
         raise ImageError(
             "clipboard images are not supported on this platform yet; attach "

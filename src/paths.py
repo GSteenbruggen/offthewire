@@ -62,8 +62,11 @@ def data_dir() -> Path:
         return install_root()
     if base := os.environ.get("LOCALAPPDATA"):
         return Path(base) / APP_NAME
-    # Not Windows, or a stripped environment: fall back to the XDG-ish spot
-    # rather than guessing at a drive letter.
+    if sys.platform == "darwin":
+        # The platform convention; ~/.local/share exists on a Mac only if
+        # something else already broke the convention.
+        return Path.home() / "Library" / "Application Support" / APP_NAME
+    # Linux, or a stripped environment: the XDG spot.
     xdg = os.environ.get("XDG_DATA_HOME")
     return (Path(xdg) if xdg else Path.home() / ".local" / "share") / APP_NAME
 
