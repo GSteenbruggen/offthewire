@@ -434,26 +434,41 @@ those that forward neither.
 
 ## Web lookup
 
-Disabled unless the agent is started with `--web`. Adds two tools —
+Disabled by default. Enable it at startup with `--web`, or at any point
+mid-session with `/web on` — no restart required. Enabling adds two tools —
 `search_web(query, pages)` and `fetch_url(url)` — both treated as mutating
-and therefore subject to approval.
+and therefore subject to approval; `/web off` removes them again.
+
+One-time backend setup (SearXNG in a local Docker container):
 
 ```powershell
 .\scripts\setup_searxng.ps1     # Windows; requires Docker Desktop
 ```
 ```bash
-./scripts/setup_searxng.sh      # Linux; requires Docker
+./scripts/setup_searxng.sh      # Linux/macOS; requires Docker
+```
+
+Then either:
+
+```
+OffTheWire --web        # enabled from the first turn
 ```
 ```
-OffTheWire --web
+> /web on               # or enabled mid-conversation
+  web lookup ON via http://localhost:8080
 ```
+
+Toggling mid-session updates the model's instructions, so it costs a one-time
+reprocess of the cached conversation prefix — the command output says so when
+it happens. `/web on` also checks that SearXNG is actually reachable and
+reports plainly when it is not, rather than letting the first search discover
+it. Bare `/web` shows status and lists every query made in the session.
 
 Search runs through a local [SearXNG](https://github.com/searxng/searxng)
 container bound to `127.0.0.1`, so no API key or account is required and no
-third party accumulates a query log. `/web` lists every query made in the
-session. The setup script enables SearXNG's JSON output format, which is off
-by default and whose absence is the usual cause of agent search failing with
-403 responses.
+third party accumulates a query log. The setup script enables SearXNG's JSON
+output format, which is off by default and whose absence is the usual cause
+of agent search failing with 403 responses.
 
 ### Condensation
 
