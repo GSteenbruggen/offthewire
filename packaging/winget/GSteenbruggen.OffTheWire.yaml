@@ -1,11 +1,11 @@
 # winget singleton manifest for OffTheWire.
 #
 # Submission: fork microsoft/winget-pkgs, place this file at
-#   manifests/g/GSteenbruggen/OffTheWire/1.3.0/GSteenbruggen.OffTheWire.yaml
+#   manifests/g/GSteenbruggen/OffTheWire/1.4.0/GSteenbruggen.OffTheWire.yaml
 # and open a pull request -- or run `wingetcreate submit` against it.
-# The InstallerSha256 below is the actual hash of the published v1.3.0 asset.
+# The InstallerSha256 below is the actual hash of the published v1.4.0 asset.
 PackageIdentifier: GSteenbruggen.OffTheWire
-PackageVersion: 1.3.0
+PackageVersion: 1.4.0
 PackageLocale: en-US
 Publisher: GSteenbruggen
 PackageName: OffTheWire
@@ -24,8 +24,8 @@ Tags:
 Installers:
   - Architecture: x64
     InstallerType: inno
-    InstallerUrl: https://github.com/GSteenbruggen/offthewire/releases/download/v1.3.0/OffTheWire-Setup-1.3.0.exe
-    InstallerSha256: 3C1603B5F46CE9F6AC8EA7F7DE04FE9BB265556134C035CE803FAD7CC427200B
+    InstallerUrl: https://github.com/GSteenbruggen/offthewire/releases/download/v1.4.0/OffTheWire-Setup-1.4.0.exe
+    InstallerSha256: D8205DA419C44E614972528AB7D980577890B1ABF85EDF6188378EE3E7275016
     Scope: user
 ManifestType: singleton
 ManifestVersion: 1.6.0

@@ -8,13 +8,13 @@
 #
 # Installing through brew also sidesteps Gatekeeper's quarantine, which is
 # the main friction of the raw tarball. The sha256 is the actual hash of the
-# published v1.3.0 asset.
+# published v1.4.0 asset.
 class Offthewire < Formula
   desc "Offline coding agent for local Ollama models"
   homepage "https://github.com/GSteenbruggen/offthewire"
-  url "https://github.com/GSteenbruggen/offthewire/releases/download/v1.3.0/OffTheWire-1.3.0-macos-arm64.tar.gz"
-  sha256 "e455036a0be1af048de1415c0c2cb4ce0c80b4c0cfd8376d5543318e2d85a368"
-  version "1.3.0"
+  url "https://github.com/GSteenbruggen/offthewire/releases/download/v1.4.0/OffTheWire-1.4.0-macos-arm64.tar.gz"
+  sha256 "7a2f85dde99ef698c944353b6ecf27177d172c51a8b883bfd423dbf7690435f3"
+  version "1.4.0"
   license "MIT"
 
   depends_on arch: :arm64
