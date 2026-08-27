@@ -311,6 +311,60 @@ def test_multipass_compaction() -> None:
           result[:90])
 
 
+def test_retroactive_save() -> None:
+    """/savesession: a conversation started unsaved becomes saved, whole.
+
+    Two things must survive the flip: the message backlog (a session that
+    starts at the moment of the command misses exactly the part worth
+    keeping), and pasted images -- whose temp files were deliberately deleted
+    once their bytes were in memory, so they must be rewritten from those
+    bytes or a later resume rehydrates nothing.
+    """
+    import base64
+
+    from session import Session
+
+    print("\n9. Retroactive save (/savesession)")
+
+    tmp = Path(tempfile.mkdtemp(prefix="acct-retro-"))
+    s = Session(model="m", context_limit=8192, system_prompt="sys",
+                sessions_dir=tmp / "sessions")
+    png = bytes.fromhex(
+        "89504e470d0a1a0a0000000d494844520000000100000001080200000090"
+        "7753de0000000c4944415408d763f8cfc0000000030001") + bytes.fromhex(
+        "5ed456ca0000000049454e44ae426082")
+
+    s.append({"role": "user", "content": "the early turn that matters"})
+    s.append({
+        "role": "user",
+        "content": "[image 1: gone.png]",
+        "images": [base64.b64encode(png).decode()],
+        "image_paths": [str(tmp / "temp-pastes" / "gone.png")],  # deleted
+    })
+    s.append({"role": "assistant", "content": "a reply"})
+    check("nothing on disk before the flip", not s.path.exists())
+
+    written = s.begin_persisting(s.sessions_dir / "pasted")
+    check("backlog backfilled", written == 3)
+    on_disk = s.path.read_text(encoding="utf-8")
+    check("early turn is in the file", "the early turn that matters" in on_disk)
+    check("base64 still not on disk", base64.b64encode(png).decode()[:24] not in on_disk)
+
+    rewritten = Path(s.messages[1]["image_paths"][0])
+    check("image rewritten from memory", rewritten.is_file(), str(rewritten))
+    check("into the session's pasted dir", rewritten.parent == s.sessions_dir / "pasted")
+    check("bytes intact", rewritten.read_bytes() == png)
+
+    s.append({"role": "user", "content": "and later turns persist normally"})
+    check("subsequent appends persist",
+          "later turns persist" in s.path.read_text(encoding="utf-8"))
+
+    back = Session.resume(s.path, model="m", context_limit=8192, system_prompt="x")
+    check("resume rehydrates the rescued image",
+          any(m.get("images") for m in back.messages))
+    check("double flip is a no-op", s.begin_persisting(s.sessions_dir / "pasted") == 4)
+
+
 def main() -> int:
     tmp = Path(tempfile.mkdtemp(prefix="acct-"))
     try:
@@ -325,6 +379,7 @@ def main() -> int:
         test_dangling_tool_call(tmp)
         test_session_lookup(tmp)
         test_multipass_compaction()
+        test_retroactive_save()
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
 

@@ -237,6 +237,7 @@ Anything that does not begin with `/` is sent to the model as a request.
 |---|---|
 | `/help` | List available commands. |
 | `/save` | Report whether the conversation is being written to disk, and where. |
+| `/savesession` | Start saving a conversation launched without `--save`, retroactively — every turn and pasted image so far is backfilled. |
 | `/model` | Show the current model and its capabilities (context, `tools` / `thinking` / `vision`). |
 | `/think <arg>` | Set when to reason (`auto` \| `always` \| `never`) or at what effort (`low` \| `medium` \| `high` \| `max` \| `default`). |
 | `/reasoning` | Toggle streaming the model's reasoning to the terminal. |
@@ -364,6 +365,10 @@ OffTheWire --save                      # persist this conversation
 OffTheWire --save --resume             # continue the most recent saved session
 OffTheWire --save --resume 20260810    # by id or unique prefix
 ```
+
+Forgot the flag? `/savesession` opts in mid-conversation and backfills
+everything accumulated so far — turns and pasted images both — after which
+the session behaves exactly as if `--save` had been passed at launch.
 
 `/resume` also works without `--save`: the previous conversation is loaded
 read-only and continued in memory without further writes.

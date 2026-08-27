@@ -773,7 +773,7 @@ class Agent:
         """
         if self.save:
             return self.session.sessions_dir / "pasted"
-        return Path(tempfile.gettempdir()) / "OffTheWire" / "pasted"
+        return Path(tempfile.gettempdir()) / paths.APP_NAME / "pasted"
 
     def _attach_images(self, user_input: str) -> tuple[str, list[IM.Attachment]]:
         """Turn image references in a typed line into attachments.
@@ -825,6 +825,27 @@ class Agent:
 
         return found.render([a.path for a in attachments]), attachments
 
+    def save_session_now(self) -> str:
+        """Retroactively persist a conversation started without --save.
+
+        The realization that a conversation matters tends to arrive mid-way
+        through it, which is exactly when --save can no longer be passed.
+        This flips persistence on and backfills everything so far -- turns
+        and pasted images both (the images from their in-memory bytes, since
+        their temp files were deliberately deleted per the privacy rule).
+        From here on the session behaves as if --save had been given.
+        """
+        if self.save:
+            return f"already saving to {self.session.path.name}"
+        self.save = True  # images_dir now resolves to sessions/pasted
+        written = self.session.begin_persisting(
+            self.session.sessions_dir / "pasted"
+        )
+        return (
+            f"saved — {written} message(s) backfilled to "
+            f"{self.session.path.name}; everything from here on is recorded"
+        )
+
     def cleanup_temp_pastes(self) -> None:
         """Remove the temp paste directory on exit when not saving.
 
@@ -834,16 +855,14 @@ class Agent:
         and only when the directory really is under the system temp dir, so a
         bug here can never reach sessions/pasted.
         """
-        if self.save:
-            return
         import shutil
 
-        target = self.images_dir
-        try:
-            if Path(tempfile.gettempdir()).resolve() in target.resolve().parents:
-                shutil.rmtree(target, ignore_errors=True)
-        except OSError:
-            pass
+        # Always the temp location, never self.images_dir: after /savesession
+        # the property points at sessions/pasted, but pre-flip orphans still
+        # sit in temp and still deserve sweeping. Anchoring to gettempdir()
+        # also makes it structurally impossible for this to touch saved data.
+        target = Path(tempfile.gettempdir()) / paths.APP_NAME / "pasted"
+        shutil.rmtree(target, ignore_errors=True)
 
     # ---------------------------------------------------------------- a turn
 
@@ -1107,6 +1126,7 @@ async def pick_model(client: OllamaClient) -> str | None:
 HELP = f"""{BOLD}commands{RESET}
   /help              this
   /save              is this conversation being written to disk?
+  /savesession       start saving now, including everything so far
   /model             show current model and its capabilities
   /think <arg>       when: auto | always | never · effort: low | medium | high | max | default
   /reasoning         toggle streaming the model's reasoning to the terminal
@@ -1139,7 +1159,8 @@ async def repl(agent: Agent) -> None:
     # rather than quietly persisting when the conversation does not.
     reader = InputReader(
         agent.session.sessions_dir / ".input_history" if agent.save else None,
-        image_dir=agent.images_dir,
+        # A callable: /savesession moves the paste destination mid-session.
+        image_dir=lambda: agent.images_dir,
     )
     ui.banner(
         version=__version__,
@@ -1149,7 +1170,7 @@ async def repl(agent: Agent) -> None:
         tools=agent.tools.names,
         session=(
             agent.session.path.name if agent.save
-            else "not saved  (--save to keep it)"
+            else "not saved  (/savesession to keep it)"
         ),
         input_note=reader.capability_note,
         web=(agent.web.searxng_url if (agent.web and agent.web.enabled) else None),
@@ -1227,6 +1248,8 @@ async def repl(agent: Agent) -> None:
                 print(static_block(agent.static_facts))
                 print(f"{DIM}--- volatile (re-probed each turn) ---{RESET}")
                 print(volatile_block(probe_volatile(agent.workspace.root), agent.workspace.root))
+            elif cmd == "savesession":
+                print(f"{DIM}{agent.save_session_now()}{RESET}")
             elif cmd == "save":
                 # Read-only on purpose. Flipping it mid-conversation would
                 # write out turns the user typed while it was off, which is the
@@ -1241,7 +1264,7 @@ async def repl(agent: Agent) -> None:
                     ui.note("this conversation is not being saved")
                     ui.note("nothing is written to disk: no transcript, no input")
                     ui.note("history, no pasted images kept after the run")
-                    ui.note("restart with --save to keep it")
+                    ui.note("/savesession keeps it — including everything so far")
             elif cmd == "paste":
                 # The same job Alt+V does, for terminals that swallow the key
                 # or a build without prompt_toolkit. Both end at the same

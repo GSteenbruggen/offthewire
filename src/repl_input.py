@@ -94,7 +94,19 @@ def clean_input(text: str) -> str:
     return text.lstrip("\ufeff\ufffe").replace("\x00", "")
 
 
-def _build_bindings(image_dir: Path | None = None) -> "KeyBindings":
+def _resolve_dir(image_dir) -> Path | None:
+    """Accept a Path or a zero-arg callable returning one.
+
+    The callable form exists for /savesession: where pastes belong depends on
+    whether the conversation is being saved, and that can now change
+    mid-session. A Path captured at startup would keep writing to the temp
+    directory after the user opted in to persistence -- and those files would
+    then be missing on resume.
+    """
+    return image_dir() if callable(image_dir) else image_dir
+
+
+def _build_bindings(image_dir=None) -> "KeyBindings":
     kb = KeyBindings()
 
     @kb.add("enter")
@@ -123,10 +135,11 @@ def _build_bindings(image_dir: Path | None = None) -> "KeyBindings":
         through run_in_terminal so printing does not fight the prompt's own
         redraw and leave the line mangled.
         """
-        if image_dir is None:
+        target = _resolve_dir(image_dir)
+        if target is None:
             return
         try:
-            path = IM.grab_clipboard(image_dir)
+            path = IM.grab_clipboard(target)
         except IM.ImageError as e:
             run_in_terminal(lambda: print(f"  {e}"))
             return
@@ -156,15 +169,17 @@ class InputReader:
         self,
         history_path: Path | None = None,
         *,
-        image_dir: Path | None = None,
+        image_dir=None,
         _input: object | None = None,
         _output: object | None = None,
     ):
         """``_input``/``_output`` exist so tests can drive a real PromptSession
         through a pipe; passing them also bypasses the isatty() check.
 
-        ``image_dir`` is where clipboard images are written; without it the
-        paste-image key is not bound at all.
+        ``image_dir`` is where clipboard images are written -- a Path, or a
+        zero-arg callable returning one so the destination can change
+        mid-session (/savesession). Without it the paste-image key is not
+        bound at all.
         """
         self.session = None
         self.using_fallback = True

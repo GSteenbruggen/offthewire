@@ -142,6 +142,53 @@ class Session:
         self.tokens_since_measure += message_tokens(message, self.chars_per_token)
         self._write_line(message)
 
+    def begin_persisting(self, pasted_dir: Path) -> int:
+        """Start writing this conversation to disk, including its backlog.
+
+        Exists for /savesession: the user launched without --save, and ten
+        turns in the conversation turned out to matter. Every message
+        accumulated so far is backfilled to the file, because a session that
+        starts at the moment of the command is missing exactly the part worth
+        keeping.
+
+        Images need special care: without --save, a pasted image's temp file
+        was deliberately deleted once its bytes were in memory (the privacy
+        rule), so ``image_paths`` may point at files that no longer exist.
+        Resuming would then rehydrate nothing. The bytes are still in each
+        message's ``images`` list, so they are written back out under the
+        session's own pasted directory and the paths updated to match.
+
+        Timestamps on backfilled lines are the time of saving, not of the
+        original turns -- the in-memory messages never carried one.
+        """
+        if self.persist:
+            return len(self.messages)
+
+        for msg in self.messages:
+            paths = msg.get("image_paths") or []
+            blobs = msg.get("images") or []
+            if blobs and paths:
+                import base64
+
+                pasted_dir.mkdir(parents=True, exist_ok=True)
+                rewritten = []
+                for raw_path, b64 in zip(paths, blobs):
+                    p = Path(raw_path)
+                    if not p.is_file():
+                        p = pasted_dir / Path(raw_path).name
+                        try:
+                            p.write_bytes(base64.b64decode(b64))
+                        except (OSError, ValueError):
+                            pass
+                    rewritten.append(str(p))
+                msg["image_paths"] = rewritten
+
+        self.persist = True
+        self.sessions_dir.mkdir(parents=True, exist_ok=True)
+        for msg in self.messages:
+            self._write_line(msg)
+        return len(self.messages)
+
     def _write_line(self, message: dict[str, Any]) -> None:
         # The single point where anything reaches the disk, so the persist
         # check belongs here rather than at each of its callers.
