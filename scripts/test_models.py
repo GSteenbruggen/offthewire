@@ -16,7 +16,9 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "src"))
 
-from models import VRAM_HEADROOM_BYTES, choose_candidate, total_vram_bytes  # noqa: E402
+from models import (  # noqa: E402
+    VRAM_HEADROOM_BYTES, choose_candidate, parse_vram_readings, total_vram_bytes,
+)
 
 PASS, FAIL = "  [PASS]", "  [FAIL]"
 failures = 0
@@ -65,11 +67,35 @@ def test_choice() -> None:
     check("headroom is enforced", best["name"] == "small:1b", best["name"])
 
 
+def test_multi_gpu_pooling() -> None:
+    """Ollama splits layers across all CUDA devices, so capacity is the sum.
+
+    The first version took the largest card, which would tell a 16+12 GB
+    machine that a 24 GB model cannot fit -- understating exactly the setup
+    a second GPU is bought to create.
+    """
+    print("\n2. Multi-GPU VRAM pooling")
+
+    one = parse_vram_readings("16376\n")
+    two = parse_vram_readings("16376\n12288\n")
+    check("single GPU parses", one == 16376 * 1024 * 1024, str(one))
+    check("two GPUs sum, not max", two == (16376 + 12288) * 1024 * 1024, str(two))
+    check("garbage lines ignored",
+          parse_vram_readings("N/A\n16376\n") == 16376 * 1024 * 1024)
+    check("no readings -> None", parse_vram_readings("") is None)
+
+    # The scenario the fix exists for: 17.5 GB model, 16 GB card + 12 GB card.
+    big = {"name": "big:27b", "size_bytes": int(17.5 * GB)}
+    small = {"name": "small:7b", "size_bytes": int(4.5 * GB)}
+    best, why = choose_candidate([small, big], parse_vram_readings("16376\n12288\n"))
+    check("pooled VRAM fits the big model", best["name"] == "big:27b", best["name"])
+
+
 def test_probe_failure_modes() -> None:
     """The probe must return None, never raise, on machines without nvidia-smi
     or with a broken one -- a wrong number would silently skew every
     recommendation."""
-    print("\n2. VRAM probe failure modes")
+    print("\n3. VRAM probe failure modes")
     try:
         v = total_vram_bytes()
         check("probe never raises", True, f"reading: {v}")
@@ -83,6 +109,7 @@ def main() -> int:
     print("MODEL SELECTION TESTS")
     print("=" * 68)
     test_choice()
+    test_multi_gpu_pooling()
     test_probe_failure_modes()
     print("\n" + "=" * 68)
     print("All model selection tests passed." if not failures else f"{failures} FAILED.")

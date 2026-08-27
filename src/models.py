@@ -246,7 +246,11 @@ def choose_candidate(
 
 
 def total_vram_bytes() -> int | None:
-    """Total VRAM of the largest GPU, or None when it cannot be read.
+    """Combined VRAM across all NVIDIA GPUs, or None when it cannot be read.
+
+    Summed, not the largest card: Ollama splits a model's layers across every
+    CUDA device it finds, so for fitting purposes two cards' memory pools --
+    a 16 GB + 12 GB machine really can hold a 24 GB model entirely on GPU.
 
     nvidia-smi is the only probe: AMD and Apple report through interfaces this
     project has no test hardware for, and a wrong VRAM number silently skews
@@ -263,9 +267,14 @@ def total_vram_bytes() -> int | None:
         return None
     if proc.returncode != 0:
         return None
-    readings = []
-    for line in proc.stdout.splitlines():
-        line = line.strip()
-        if line.isdigit():
-            readings.append(int(line) * 1024 * 1024)  # MiB -> bytes
-    return max(readings) if readings else None
+    return parse_vram_readings(proc.stdout)
+
+
+def parse_vram_readings(text: str) -> int | None:
+    """Sum of per-GPU MiB lines from nvidia-smi, in bytes. Pure, for tests."""
+    readings = [
+        int(line.strip()) * 1024 * 1024
+        for line in text.splitlines()
+        if line.strip().isdigit()
+    ]
+    return sum(readings) if readings else None
