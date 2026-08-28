@@ -25,7 +25,7 @@ Installers:
   - Architecture: x64
     InstallerType: inno
     InstallerUrl: https://github.com/GSteenbruggen/offthewire/releases/download/v1.4.1/OffTheWire-Setup-1.4.1.exe
-    InstallerSha256: ECDE61848141B773CCE26133AF417CC7BE160DC5EFE55C4672F7FC62982FA063
+    InstallerSha256: 976851138ABD8F30052791FDCE011F39906723671BAFA2331618C619E27D4FFA
     Scope: user
 ManifestType: singleton
 ManifestVersion: 1.6.0

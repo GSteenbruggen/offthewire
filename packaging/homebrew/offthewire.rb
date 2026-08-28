@@ -13,7 +13,7 @@ class Offthewire < Formula
   desc "Offline coding agent for local Ollama models"
   homepage "https://github.com/GSteenbruggen/offthewire"
   url "https://github.com/GSteenbruggen/offthewire/releases/download/v1.4.1/OffTheWire-1.4.1-macos-arm64.tar.gz"
-  sha256 "cb41c9c30210d3b07918d6c55e87ad75467488fbf9f748338c71cdc1b87b582a"
+  sha256 "0da969016f80795b1d6af7939e5824cfaed8c40440e9040df4f6298a4af36237"
   version "1.4.1"
   license "MIT"
 
