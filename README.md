@@ -222,7 +222,7 @@ OffTheWire [workspace] [options]
 | `--think-level low\|medium\|high\|max\|default` | Reasoning effort when a turn does think. Default `low`; `default` sends a plain boolean for models without effort levels. |
 | `--yes` | Auto-approve file writes and shell commands. |
 | `--save` | Persist the conversation to disk. Off by default. |
-| `--max-steps N` | Tool calls allowed per turn. Default 25. |
+| `--max-steps N` | Tool calls allowed per turn. Default 25; `0` removes the cap. |
 | `--hide-reasoning` | Show progress indicators instead of streaming the reasoning block. |
 | `--web` | Enable internet lookup. Off by default. |
 | `--searxng URL` | SearXNG endpoint. Default `http://localhost:8080`. |
@@ -247,7 +247,7 @@ Anything that does not begin with `/` is sent to the model as a request.
 | `/folder [path]` | Show or change the directory the agent works in. Remembered: an interactive launch without an explicit path reopens here. |
 | `/web [on\|off]` | Toggle internet lookup without restarting; bare `/web` shows status and the queries made this session. |
 | `/maxtokens [n]` | Show or change the context window (accepts `65536`, `64k`, `128K`). |
-| `/maxsteps [n]` | Show or change the tool-call limit per turn. |
+| `/maxsteps [n]` | Show or change the tool-call limit per turn; `unlimited` (or `0`) removes the cap — Ctrl+C and the repeated-call guard remain the protections. |
 | `/tokens` | Show current context usage. |
 | `/compact` | Summarize older turns to free context. |
 | `/history [full]` | Replay the conversation; `full` includes tool calls and results. |

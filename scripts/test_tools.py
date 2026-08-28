@@ -225,6 +225,71 @@ def test_workspace_memory() -> None:
         importlib.reload(paths)
 
 
+def test_step_cap_and_unlimited() -> None:
+    """The per-turn step cap must bind at its limit and vanish at 0.
+
+    A fake client emits a fresh tool call every round (arguments varied so
+    the repeated-call guard never triggers), then finishes. With the default
+    cap the turn must stop at exactly max_steps rounds; with max_steps=0 it
+    must run through all rounds and finish naturally. Also pins the thinking
+    checkpoint to *periodic*: an earlier version thought on every step >= 8,
+    which quietly turned a long turn into always-on reasoning.
+    """
+    from agent import Agent, ThinkingPolicy
+    from tools import Workspace
+
+    print("\n6. Step cap and unlimited mode")
+
+    # The periodicity pin, first: pure policy, no machinery.
+    pol = ThinkingPolicy("auto")
+    thinking_steps = [
+        s for s in range(2, 41)
+        if pol.decide(step=s, last_tool_failed=False, is_first_step=False)[0]
+    ]
+    check("checkpoints are periodic, not permanent",
+          thinking_steps == [8, 16, 24, 32, 40], str(thinking_steps[:6]))
+
+    class FakeResult:
+        def __init__(self, tool_calls):
+            self.content = "" if tool_calls else "done"
+            self.thinking = ""
+            self.tool_calls = tool_calls
+            self.done_reason = ""
+            self.prompt_tokens = 100
+            self.gen_tokens = 5
+            self.gen_tps = 1.0
+            self.total_s = 0.1
+
+    class FakeClient:
+        def __init__(self, rounds):
+            self.rounds = rounds
+            self.calls = 0
+
+        async def chat_stream(self, model, messages, **kw):
+            self.calls += 1
+            if self.calls <= self.rounds:
+                return FakeResult([{"function": {
+                    "name": "read_file",
+                    "arguments": {"path": "f.txt", "start_line": self.calls},
+                }}])
+            return FakeResult([])
+
+    root = Path(tempfile.mkdtemp(prefix="otw-steps-"))
+    (root / "f.txt").write_text("line\n" * 50)
+
+    def run(max_steps, rounds):
+        client = FakeClient(rounds)
+        agent = Agent(client, "m", Workspace(root), interactive=False,
+                      auto_approve=True, max_steps=max_steps)
+        asyncio.run(agent.run_turn("go"))
+        return client.calls
+
+    check("default cap binds at its limit", run(25, rounds=30) == 25)
+    check("small cap binds too", run(5, rounds=30) == 5)
+    check("unlimited runs to natural completion", run(0, rounds=30) == 31,
+          "30 tool rounds + the finishing reply")
+
+
 def main() -> int:
     print("=" * 68)
     print("WORKSPACE AND COMMAND TESTS")
@@ -234,6 +299,7 @@ def main() -> int:
     test_cancellation_kills_the_tree()
     test_timeout_kills_the_tree()
     test_workspace_memory()
+    test_step_cap_and_unlimited()
     print("\n" + "=" * 68)
     print("All workspace/command tests passed." if not failures else f"{failures} FAILED.")
     print("=" * 68)

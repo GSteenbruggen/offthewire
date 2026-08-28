@@ -149,8 +149,11 @@ class ThinkingPolicy:
         if last_tool_failed:
             # something went wrong; the model needs to actually reason about why
             return True, "recovering from tool error"
-        if step >= 8:
-            # long chains tend to drift; a checkpoint helps it re-orient
+        if step >= 8 and step % 8 == 0:
+            # Long chains tend to drift; a periodic checkpoint helps the model
+            # re-orient. Periodic, not permanent: an earlier version read
+            # `step >= 8`, which switched thinking on for every step of a long
+            # turn -- the exact always-on cost the policy exists to avoid.
             return True, "long chain checkpoint"
         return False, "mechanical step"
 
@@ -887,7 +890,11 @@ class Agent:
         # between, so edit → test → edit → test loops are never blocked.
         call_counts: dict[str, tuple[int, int]] = {}
         mutations = 0
-        for step in range(1, self.max_steps + 1):
+        # max_steps == 0 means uncapped: the bound becomes a number no run
+        # reaches, the for/else keeps its shape, and the exhausted branch
+        # simply never fires. Ctrl+C and the repeated-call guard are the
+        # protections that matter in that mode.
+        for step in range(1, (self.max_steps or 1_000_000_000) + 1):
             # Before building the request, never after sending it.
             #
             # This check used to sit at the foot of the loop, which had two
@@ -1156,7 +1163,7 @@ HELP = f"""{BOLD}commands{RESET}
   /folder [path]     show or change the working directory (remembered next launch)
   /web [on|off]      toggle internet lookup; bare /web shows status and queries
   /maxtokens [n]     show or change the context window, e.g. /maxtokens 64k
-  /maxsteps [n]      show or change the tool-call limit per turn
+  /maxsteps [n]      tool-call limit per turn; 'unlimited' (or 0) removes it
   /tokens            context usage right now
   /compact           summarize older turns to free context
   /history [full]    replay this conversation ("full" adds tool calls/results)
@@ -1333,12 +1340,22 @@ async def repl(agent: Agent) -> None:
                         await agent.set_context(target)
             elif cmd == "maxsteps":
                 if not arg:
-                    ui.note(f"{agent.max_steps} tool calls per turn")
+                    ui.note(
+                        "unlimited tool calls per turn (Ctrl+C stops a runaway)"
+                        if agent.max_steps == 0
+                        else f"{agent.max_steps} tool calls per turn"
+                    )
+                elif arg in ("unlimited", "off", "0"):
+                    agent.max_steps = 0
+                    ui.note(
+                        "max steps: unlimited — Ctrl+C stops a runaway; the "
+                        "repeated-call guard stays active"
+                    )
                 elif arg.isdigit() and int(arg) > 0:
                     agent.max_steps = int(arg)
                     ui.note(f"max steps per turn: {agent.max_steps}")
                 else:
-                    ui.error(f"expected a positive number, got {arg!r}")
+                    ui.error(f"expected a number, 'unlimited', or 'off' — got {arg!r}")
             elif cmd == "tokens":
                 print(f"{DIM}{agent.session.budget_line()}, {agent.session.compactions} compaction(s){RESET}")
             elif cmd == "compact":
@@ -1454,7 +1471,8 @@ async def main() -> int:
         "--max-steps",
         type=int,
         default=MAX_STEPS_PER_TURN,
-        help=f"Tool calls allowed per turn, default {MAX_STEPS_PER_TURN}.",
+        help=f"Tool calls allowed per turn, default {MAX_STEPS_PER_TURN}; "
+        "0 removes the cap.",
     )
     ap.add_argument(
         "--hide-reasoning",
