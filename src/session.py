@@ -242,6 +242,10 @@ class Session:
 
     # ------------------------------------------------------------- compaction
 
+    def can_compact(self) -> bool:
+        """Whether there is anything old enough to fold away."""
+        return len(self.messages) > KEEP_RECENT_MESSAGES
+
     def _split_for_compaction(self) -> tuple[list[dict], list[dict]]:
         if len(self.messages) <= KEEP_RECENT_MESSAGES:
             return [], self.messages

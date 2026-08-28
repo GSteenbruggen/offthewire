@@ -290,6 +290,84 @@ def test_step_cap_and_unlimited() -> None:
           "30 tool rounds + the finishing reply")
 
 
+def test_context_limit_recovery() -> None:
+    """A reply cut off by the context filling triggers compact-and-continue.
+
+    The old behavior told the user to run /maxtokens by hand; the software
+    already knew the fix. The recovery must run at most once per turn (a
+    model that hits the limit twice gets the honest warning instead of a
+    loop), and must not fire at all when there is nothing to compact.
+    """
+    from agent import Agent
+    from tools import Workspace
+
+    print("\n7. Context-limit recovery")
+
+    class FakeResult:
+        def __init__(self, content, done_reason):
+            self.content = content
+            self.thinking = ""
+            self.tool_calls = []
+            self.done_reason = done_reason
+            self.prompt_tokens = 100
+            self.gen_tokens = 5
+            self.gen_tps = 1.0
+            self.total_s = 0.1
+
+    class FakeClient:
+        def __init__(self, truncate_times):
+            self.truncate_times = truncate_times
+            self.chats = 0
+            self.summaries = 0
+
+        async def chat_stream(self, model, messages, **kw):
+            self.chats += 1
+            if self.chats <= self.truncate_times:
+                return FakeResult("partial thought that got cut", "length")
+            return FakeResult("…and here is the rest.", "stop")
+
+        async def generate(self, model, prompt, **kw):  # compaction pass
+            self.summaries += 1
+
+            class R:
+                content = "summary of earlier work"
+                gen_tokens = 10
+                total_s = 0.1
+
+            return R()
+
+    root = Path(tempfile.mkdtemp(prefix="otw-lenrec-"))
+
+    def run(truncate_times, seed_messages):
+        client = FakeClient(truncate_times)
+        agent = Agent(client, "m", Workspace(root), interactive=False,
+                      auto_approve=True)
+        for i in range(seed_messages):
+            agent.session.messages.append(
+                {"role": "user" if i % 2 == 0 else "assistant",
+                 "content": f"old turn {i} " * 30})
+        asyncio.run(agent.run_turn("go"))
+        return client, agent
+
+    client, agent = run(truncate_times=1, seed_messages=10)
+    check("recovery compacts", client.summaries >= 1, f"{client.summaries} passes")
+    check("model is asked to continue", client.chats == 2, f"{client.chats} calls")
+    check("continuation note in transcript",
+          any("Continue exactly" in str(m.get("content", ""))
+              for m in agent.session.messages))
+    check("the finished thought arrives",
+          agent.session.messages[-1]["content"].endswith("the rest."))
+
+    client, _ = run(truncate_times=99, seed_messages=10)
+    check("recovery runs at most once per turn", client.chats == 2,
+          f"{client.chats} calls")
+
+    client, _ = run(truncate_times=1, seed_messages=0)
+    check("no recovery when nothing to compact",
+          client.chats == 1 and client.summaries == 0,
+          f"chats={client.chats} summaries={client.summaries}")
+
+
 def main() -> int:
     print("=" * 68)
     print("WORKSPACE AND COMMAND TESTS")
@@ -300,6 +378,7 @@ def main() -> int:
     test_timeout_kills_the_tree()
     test_workspace_memory()
     test_step_cap_and_unlimited()
+    test_context_limit_recovery()
     print("\n" + "=" * 68)
     print("All workspace/command tests passed." if not failures else f"{failures} FAILED.")
     print("=" * 68)

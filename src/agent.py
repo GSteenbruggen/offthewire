@@ -882,6 +882,9 @@ class Agent:
 
         last_tool_failed = False
         compactions_this_turn = 0
+        # One self-recovery from a context-truncated reply per turn: compact,
+        # ask the model to pick up where it stopped, and never loop on it.
+        length_recoveries = 0
         # Signatures of tool calls made this turn, to catch the model repeating
         # itself. Hitting the step cap is usually the symptom; a loop is the
         # disease, and 25 identical calls is 25 wasted minutes on a local model.
@@ -973,11 +976,7 @@ class Agent:
 
             self.session.note_actual(result.prompt_tokens)
             ui.stats_line(result.gen_tokens, result.gen_tps, result.total_s)
-            if result.done_reason == "length":
-                ui.warn(
-                    "the reply hit the token/context limit and is cut off "
-                    "mid-thought — /maxtokens to raise the window"
-                )
+            truncated = result.done_reason == "length"
 
             assistant_msg: dict[str, Any] = {
                 "role": "assistant",
@@ -988,6 +987,40 @@ class Agent:
             self.session.append(assistant_msg)
 
             if not result.tool_calls:
+                # A reply cut off by the context filling is not the end of the
+                # turn -- it is a problem the software already knows how to
+                # solve. Compact to make room and let the model finish the
+                # thought. Once per turn, and only when there is history to
+                # fold; the pre-request check at the top of the loop prevents
+                # this for conversations, but a single turn's own growth can
+                # blow past it mid-reply.
+                if (
+                    truncated
+                    and length_recoveries == 0
+                    and self.session.can_compact()
+                ):
+                    length_recoveries += 1
+                    ui.warn(
+                        "the reply hit the context limit mid-thought — "
+                        "compacting to make room, then continuing…"
+                    )
+                    print(f"{DIM}  {await self.session.compact(self.client, on_progress=ui.note)}{RESET}")
+                    self._env_injected = False
+                    self.session.append({
+                        "role": "user",
+                        "content": (
+                            "[Your reply was cut off when the context window "
+                            "filled. Space has been freed. Continue exactly "
+                            "where you stopped — do not restart or repeat "
+                            "what you already said.]"
+                        ),
+                    })
+                    continue
+                if truncated:
+                    ui.warn(
+                        "the reply hit the token/context limit and is cut off "
+                        "mid-thought — /maxtokens to raise the window"
+                    )
                 # the answer already streamed to the terminal; don't reprint it
                 if not result.content.strip():
                     ui.note("(no output)")

@@ -557,7 +557,9 @@ Decisions specific to running agents on small local models:
   against the `prompt_eval_count` Ollama reports; only messages appended
   since the last response are estimated. Compaction triggers at 75% of the
   window and summarizes in bounded passes so the summarization prompt itself
-  always fits the context window.
+  always fits the context window. A reply cut off by the window filling
+  mid-thought triggers the same compaction automatically, and the model is
+  asked to continue where it stopped (once per turn).
 
 ### Environment grounding
 
