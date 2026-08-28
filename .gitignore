@@ -5,3 +5,4 @@ sessions/
 *.log
 searxng-config/
 build/
+state.json

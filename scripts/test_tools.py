@@ -172,6 +172,59 @@ def test_timeout_kills_the_tree() -> None:
     check("no orphan outlived the timeout", not marker.exists())
 
 
+def test_workspace_memory() -> None:
+    """The last /folder destination is remembered — with two guard rails.
+
+    An explicit path must always win, and non-interactive runs must never be
+    redirected: a --prompt automation silently operating on last week's
+    project instead of the current directory would be a correctness bug
+    wearing a convenience's clothes.
+    """
+    import importlib
+
+    print("\n5. Workspace memory")
+
+    import agent as A
+    import paths
+
+    here = Path(tempfile.mkdtemp(prefix="otw-remembered-"))
+
+    ws, restored = A.resolve_workspace("C:/explicit", str(here), True)
+    check("explicit path always wins", ws == "C:/explicit" and not restored)
+
+    ws, restored = A.resolve_workspace(None, str(here), True)
+    check("interactive launch restores", ws == str(here) and restored)
+
+    ws, restored = A.resolve_workspace(None, str(here), False)
+    check("non-interactive never restores", ws == "." and not restored)
+
+    ws, restored = A.resolve_workspace(None, str(here / "gone-away"), True)
+    check("vanished path falls back to cwd", ws == "." and not restored)
+
+    ws, restored = A.resolve_workspace(None, None, True)
+    check("no memory means cwd", ws == "." and not restored)
+
+    # State round-trip, isolated from the real data dir via the env override.
+    saved = os.environ.get(paths.HOME_ENV)
+    os.environ[paths.HOME_ENV] = str(here / "home")
+    try:
+        importlib.reload(paths)
+        check("state starts empty", paths.read_state() == {})
+        paths.write_state(last_workspace=str(here))
+        check("state round-trips", paths.read_state().get("last_workspace") == str(here))
+        paths.write_state(other="kept")
+        check("updates merge, not replace",
+              paths.read_state().get("last_workspace") == str(here))
+        (here / "home" / "state.json").write_text("{corrupt", encoding="utf-8")
+        check("corrupt state reads as empty", paths.read_state() == {})
+    finally:
+        if saved is None:
+            os.environ.pop(paths.HOME_ENV, None)
+        else:
+            os.environ[paths.HOME_ENV] = saved
+        importlib.reload(paths)
+
+
 def main() -> int:
     print("=" * 68)
     print("WORKSPACE AND COMMAND TESTS")
@@ -180,6 +233,7 @@ def main() -> int:
     test_run_command_basics()
     test_cancellation_kills_the_tree()
     test_timeout_kills_the_tree()
+    test_workspace_memory()
     print("\n" + "=" * 68)
     print("All workspace/command tests passed." if not failures else f"{failures} FAILED.")
     print("=" * 68)

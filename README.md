@@ -244,7 +244,7 @@ Anything that does not begin with `/` is sent to the model as a request.
 | `/approve` | Toggle auto-approval of file writes and shell commands. |
 | `/env` | Show what the model has been told about the environment. |
 | `/paste` | Attach the image on the clipboard (equivalent to `Alt+V`). |
-| `/folder [path]` | Show or change the directory the agent works in. |
+| `/folder [path]` | Show or change the directory the agent works in. Remembered: an interactive launch without an explicit path reopens here. |
 | `/web [on\|off]` | Toggle internet lookup without restarting; bare `/web` shows status and the queries made this session. |
 | `/maxtokens [n]` | Show or change the context window (accepts `65536`, `64k`, `128K`). |
 | `/maxsteps [n]` | Show or change the tool-call limit per turn. |
@@ -258,7 +258,10 @@ Anything that does not begin with `/` is sent to the model as a request.
 
 `/folder <path>` moves the agent to a different working directory
 mid-conversation; tools, shell working directory, and the environment block
-follow. Because the system prompt names the workspace, switching folders costs
+follow. The destination is remembered: the next *interactive* launch without
+an explicit path reopens there (and says so). An explicit path always wins,
+and `--prompt` runs always use the current directory — an automation must
+never be silently redirected to last session's project. Because the system prompt names the workspace, switching folders costs
 a one-time reprocess of the cached conversation prefix on the next turn.
 
 ### Input
@@ -359,6 +362,11 @@ written to the temporary directory only for the moment they are encoded.
 
 `/save` reports the current mode; `/sessions`, `/history`, and `/resume`
 state explicitly when the current conversation is not being recorded.
+
+One piece of non-conversation state is kept without `--save`: the last
+workspace, one line in `state.json` in the data directory, so `/folder` can
+survive a restart. No conversation content is ever in it; delete the file to
+forget.
 
 ```powershell
 OffTheWire --save                      # persist this conversation

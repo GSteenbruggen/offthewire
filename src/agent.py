@@ -580,6 +580,7 @@ class Agent:
         self._env_injected = False
         self._env_snapshot = {}
 
+        paths.write_state(last_workspace=str(new_root))
         return f"Successfully moved to {new_root}"
 
     def _rebuild_system_prompt(self) -> None:
@@ -1093,6 +1094,25 @@ class Agent:
 # ------------------------------------------------------------------ startup
 
 
+def resolve_workspace(
+    cli_arg: str | None, remembered: str | None, interactive: bool
+) -> tuple[str, bool]:
+    """Which directory this run works in, and whether it was restored.
+
+    Precedence: an explicit path always wins; the remembered /folder
+    destination applies only to interactive launches (a --prompt automation
+    silently operating on last week's project instead of the current
+    directory would be a correctness bug wearing a convenience's clothes);
+    otherwise the launch directory, exactly as before the feature existed.
+    A remembered path that no longer exists is skipped, not an error.
+    """
+    if cli_arg is not None:
+        return cli_arg, False
+    if interactive and remembered and Path(remembered).is_dir():
+        return remembered, True
+    return ".", False
+
+
 async def pick_model(client: OllamaClient) -> str | None:
     rec = await M.recommend_agent_model(client)
     candidates = rec.get("candidates") or []
@@ -1133,7 +1153,7 @@ HELP = f"""{BOLD}commands{RESET}
   /approve           toggle auto-approval of file writes and shell commands
   /env               what the model has been told about this machine
   /paste             attach the image on the clipboard (or press Alt+V)
-  /folder [path]     show or change the directory the agent works in
+  /folder [path]     show or change the working directory (remembered next launch)
   /web [on|off]      toggle internet lookup; bare /web shows status and queries
   /maxtokens [n]     show or change the context window, e.g. /maxtokens 64k
   /maxsteps [n]      show or change the tool-call limit per turn
@@ -1405,7 +1425,11 @@ async def main() -> int:
         help="Write a detailed local log for bug reports. The log never leaves "
         "this machine; the path is printed at startup.",
     )
-    ap.add_argument("workspace", nargs="?", default=".", help="Directory the agent may work in.")
+    ap.add_argument(
+        "workspace", nargs="?", default=None,
+        help="Directory the agent may work in. Defaults to the last /folder "
+        "destination in interactive runs, else the current directory.",
+    )
     ap.add_argument("--model", help="Skip the picker and use this model.")
     ap.add_argument("--context", type=int, default=DEFAULT_CONTEXT, help="Context window in tokens.")
     ap.add_argument("--think", choices=["auto", "always", "never"], default="auto")
@@ -1518,11 +1542,23 @@ async def main() -> int:
 
     ctx = min(args.context, caps["max_context"] or args.context)
 
+    interactive = sys.stdin.isatty() and not args.prompt
+    ws_path, restored = resolve_workspace(
+        args.workspace, paths.read_state().get("last_workspace"), interactive
+    )
     try:
-        workspace = Workspace(args.workspace)
+        workspace = Workspace(ws_path)
     except ValueError as e:
         print(f"{RED}{e}{RESET}")
         return 2
+    paths.write_state(last_workspace=str(workspace.root))
+    if restored:
+        # Reopening somewhere other than the shell's cwd must never be a
+        # silent surprise.
+        print(
+            f"{DIM}workspace restored: {workspace.root}  "
+            f"(pass a path or /folder to change){RESET}"
+        )
 
     web = WebSearch(
         client, model,
@@ -1537,7 +1573,7 @@ async def main() -> int:
         auto_approve=args.yes,
         show_reasoning=not args.hide_reasoning, web=web,
         max_steps=args.max_steps,
-        interactive=sys.stdin.isatty() and not args.prompt,
+        interactive=interactive,
         supports_vision=caps["supports_vision"],
         save=args.save,
     )

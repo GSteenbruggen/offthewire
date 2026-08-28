@@ -74,3 +74,40 @@ def data_dir() -> Path:
 def sessions_dir() -> Path:
     """Saved conversations, pasted images and the input history live here."""
     return data_dir() / "sessions"
+
+
+def state_file() -> Path:
+    """Small non-conversation state, e.g. the last workspace.
+
+    Deliberately separate from sessions: the no-write-without---save promise
+    covers conversation *content* (transcript, input history, images). This
+    file holds one line of preference-grade state so the program can reopen
+    where it left off -- and it is the only thing written without --save, a
+    fact the README states rather than hides.
+    """
+    return data_dir() / "state.json"
+
+
+def read_state() -> dict:
+    """The saved state, or {} for any kind of absence or damage."""
+    import json
+
+    try:
+        return json.loads(state_file().read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+
+
+def write_state(**updates) -> None:
+    """Merge updates into the state file. Failure is silent by design:
+    remembering the last folder is a convenience, and a read-only disk must
+    not turn it into a crash."""
+    import json
+
+    state = read_state()
+    state.update(updates)
+    try:
+        state_file().parent.mkdir(parents=True, exist_ok=True)
+        state_file().write_text(json.dumps(state, indent=2), encoding="utf-8")
+    except OSError:
+        pass
