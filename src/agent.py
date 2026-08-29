@@ -1543,6 +1543,20 @@ async def main() -> int:
         help="Server address override; must resolve to this machine. "
         "Defaults per backend.",
     )
+    ap.add_argument(
+        "--turbo",
+        action="store_true",
+        help="Launch llama-server on the model's GGUF automatically (implies "
+        "--backend llamacpp): CUDA environment, GPU layer fit, and "
+        "speculative decoding when the model has an MTP draft head. The "
+        "server is stopped on exit.",
+    )
+    ap.add_argument(
+        "--gpu-layers",
+        type=int,
+        help="With --turbo: override the estimated number of layers offloaded "
+        "to the GPU.",
+    )
     ap.add_argument("--yes", action="store_true", help="Auto-approve writes and commands.")
     ap.add_argument(
         "--save",
@@ -1607,6 +1621,49 @@ async def main() -> int:
             sys.__excepthook__(exc_type, exc, tb)
         sys.excepthook = _hook
         print(f"{DIM}debug log: {log_path}{RESET}")
+
+    turbo_server = None
+    if args.turbo:
+        import turbo as TB
+
+        model = args.model
+        if not model:
+            # Prefer the informed picker when Ollama is up; fall back to the
+            # manifest tree, which needs nothing running.
+            try:
+                probe = OllamaClient()
+                if await probe.ping():
+                    model = await pick_model(probe)
+            except NonLocalHostError:
+                pass
+            if not model:
+                installed = TB.installed_manifest_names()
+                if len(installed) == 1:
+                    model = installed[0]
+                else:
+                    print(f"{RED}--turbo needs a model. Pass --model NAME.{RESET}")
+                    for name in installed[:15]:
+                        print(f"{DIM}  {name}{RESET}")
+                    return 2
+        try:
+            turbo_server = await TB.launch_turbo(
+                model,
+                context=args.context,
+                gpu_layers=args.gpu_layers,
+                note=lambda s: print(f"{DIM}{s}{RESET}"),
+            )
+        except TB.TurboError as e:
+            print(f"{RED}{e}{RESET}")
+            return 2
+        # Every exit path from here on -- including early `return 2`s and
+        # unhandled exceptions -- must take the server down with it, or a
+        # 17 GB model stays resident in VRAM behind a closed terminal.
+        import atexit
+
+        atexit.register(turbo_server.stop)
+        args.backend = "llamacpp"
+        args.host = turbo_server.host
+        args.model = model
 
     try:
         if args.backend == "ollama":
@@ -1762,6 +1819,9 @@ async def main() -> int:
         return 0
     finally:
         agent.cleanup_temp_pastes()
+        if turbo_server is not None:
+            print(f"{DIM}stopping llama-server…{RESET}")
+            turbo_server.stop()
 
 
 if __name__ == "__main__":

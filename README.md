@@ -221,6 +221,8 @@ OffTheWire [workspace] [options]
 | `--model NAME` | Use a specific model instead of the interactive picker. |
 | `--backend ollama\|llamacpp\|lmstudio` | Model server to drive. Default `ollama`; see [Backends](#backends). |
 | `--host URL` | Server address override. Must resolve to this machine — the loopback guard applies to every backend. |
+| `--turbo` | Launch `llama-server` on the model's own GGUF automatically — CUDA environment, GPU layer fit, speculative decoding when the model has an MTP draft head. See [Turbo mode](#turbo-mode). |
+| `--gpu-layers N` | With `--turbo`: override the estimated GPU layer count. |
 | `--context N` | Context window in tokens. Default 32768, capped to the model's maximum. |
 | `--think auto\|always\|never` | When to enable reasoning. Default `auto`. |
 | `--think-level low\|medium\|high\|max\|default` | Reasoning effort when a turn does think. Default `low`; `default` sends a plain boolean for models without effort levels. |
@@ -344,6 +346,33 @@ OffTheWire --backend llamacpp
 - Port note: llama-server's default port (8080) collides with the SearXNG
   container's. Running both: launch llama-server with `--port 8081` and
   pass `--host localhost:8081`.
+
+### Turbo mode
+
+```
+OffTheWire --turbo
+```
+
+Turbo mode runs the manual llama.cpp setup as one command. It finds the
+`llama-server` binary Ollama ships, resolves the model name to its GGUF
+file by reading Ollama's manifests directly (Ollama does not need to be
+running), sets the CUDA environment that makes the server actually use the
+GPU, fits the number of offloaded layers to measured free VRAM, launches on
+a free local port, waits for the model to load, and connects. Quitting
+OffTheWire stops the server and frees the VRAM.
+
+Two decisions are made from the GGUF's own metadata: the layer count (for
+the VRAM fit — override with `--gpu-layers N`) and whether the model
+carries an MTP draft head, which enables speculative decoding
+(`--spec-type draft-mtp`) automatically. On models with the head, measured
+generation speed improved 1.27× over the same model under Ollama; models
+without it run at parity, so there is no penalty for trying.
+
+If another model is resident in Ollama and the target does not fit in the
+VRAM left over, turbo asks Ollama to unload it first (Ollama reloads it
+automatically on next use). The server's log is written under the data
+directory and its path printed at launch — the first place to look if a
+load fails.
 
 ### LM Studio
 
@@ -707,6 +736,7 @@ src/
   agent.py            agent loop, REPL, thinking policy
   ollama_client.py    async Ollama client: loopback guard, timing, think toggle
   openai_compat.py    llama.cpp / LM Studio client behind the same guard
+  turbo.py            one-command llama-server launch: GGUF metadata, VRAM fit
   models.py           model listing, inspection, load/unload, benchmarking
   server.py           MCP stdio server
   tools.py            agent tools: read / write / edit / find / search / shell
@@ -782,6 +812,7 @@ Notes:
 ```powershell
 .venv\Scripts\python.exe scripts\test_accounting.py    # context budget and compaction
 .venv\Scripts\python.exe scripts\test_backends.py      # llama.cpp / LM Studio client, translation, SSE
+.venv\Scripts\python.exe scripts\test_turbo.py         # GGUF metadata, manifest resolution, VRAM fit
 .venv\Scripts\python.exe scripts\test_images.py        # image handling and persistence
 .venv\Scripts\python.exe scripts\test_repl_input.py    # input handling via a real PromptSession
 .venv\Scripts\python.exe scripts\test_websearch.py     # source ranking, refusal detection, SSRF guard
@@ -807,8 +838,7 @@ additionally exercises the MCP server against a live Ollama instance.
   third-party MCP servers
 - Parallel tool execution within a step
 - Vision (image attachments) through the llama.cpp and LM Studio backends
-- A launch helper that resolves an installed Ollama model's GGUF and starts
-  `llama-server` with speculative decoding configured ("turbo mode")
+- Multi-GPU placement control in turbo mode (which card gets which layers)
 
 ---
 
