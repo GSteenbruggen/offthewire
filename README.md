@@ -12,10 +12,10 @@
   <sub>Windows: installer, per-user, no administrator · Linux and macOS: self-contained tarballs · <a href="https://github.com/GSteenbruggen/offthewire/releases">all releases</a></sub>
 </p>
 
-OffTheWire brings agentic coding to your local Ollama models. It can inspect
-and modify code, run tests, shell commands, search repositories, analyze
-images, and optionally perform web research — <em><ins>all while inference
-stays on your own machine</ins></em>. Existing Ollama models are recognized
+OffTheWire brings <em><ins>verifiably offline</ins></em> agentic coding to
+your local Ollama models. It can inspect and modify code, run tests, shell
+commands, search repositories, analyze images, and optionally perform web
+research — all while inference stays on your own machine. Existing Ollama models are recognized
 automatically, so
 anything installed before OffTheWire continues working with no migration or
 reinstallation required. A bundled MCP server also exposes your local models
