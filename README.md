@@ -71,6 +71,7 @@ pass the full test suite in CI — treat both as beta.
 - [Features](#features)
 - [Installation](#installation)
 - [Usage](#usage)
+- [Backends](#backends)
 - [Security model](#security-model)
 - [Session persistence](#session-persistence)
 - [Image attachments](#image-attachments)
@@ -89,7 +90,8 @@ pass the full test suite in CI — treat both as beta.
 ## Features
 
 - **Fully local agent loop** — read, write, edit, search, and shell tools over
-  a workspace, driven by any tool-capable Ollama model.
+  a workspace, driven by any tool-capable Ollama model — or a llama.cpp /
+  LM Studio server (see [Backends](#backends)).
 - **Per-turn thinking policy** — reasoning is enabled when planning or
   recovering from errors and disabled for mechanical steps, roughly halving
   wall-clock time on typical agent turns (see [Benchmarks](#benchmarks)).
@@ -217,6 +219,8 @@ OffTheWire [workspace] [options]
 | Option | Description |
 |---|---|
 | `--model NAME` | Use a specific model instead of the interactive picker. |
+| `--backend ollama\|llamacpp\|lmstudio` | Model server to drive. Default `ollama`; see [Backends](#backends). |
+| `--host URL` | Server address override. Must resolve to this machine — the loopback guard applies to every backend. |
 | `--context N` | Context window in tokens. Default 32768, capped to the model's maximum. |
 | `--think auto\|always\|never` | When to enable reasoning. Default `auto`. |
 | `--think-level low\|medium\|high\|max\|default` | Reasoning effort when a turn does think. Default `low`; `default` sends a plain boolean for models without effort levels. |
@@ -309,6 +313,58 @@ minutes.
 
 ---
 
+## Backends
+
+Ollama is the default and needs no flags. Two additional backends speak the
+OpenAI-compatible API and are selected with `--backend`; the agent loop,
+session files, and containment guarantees are identical on all three, and a
+conversation saved on one backend resumes on another.
+
+### llama.cpp
+
+```
+llama-server -m model.gguf --jinja -c 32768
+OffTheWire --backend llamacpp
+```
+
+- `--jinja` is required for tool calling. OffTheWire verifies this with a
+  probe request at startup and reports a clear error instead of failing
+  mid-conversation.
+- The context window is fixed when the server is launched (`-c`); the agent
+  reads the real size from `/props` and budgets against it. `/maxtokens`
+  can lower the budget but the server must be restarted to raise the
+  ceiling.
+- To stream the reasoning block separately from content, launch the server
+  with `--reasoning-format deepseek`.
+- Why bother, when Ollama runs the same GGUF? `llama-server` exposes
+  features Ollama does not yet, most notably speculative decoding
+  (`--spec-type` and friends) — measured at 1.27× generation speed on this
+  project's reference model. That machinery, not raw speed, is the reason
+  this backend exists.
+- Port note: llama-server's default port (8080) collides with the SearXNG
+  container's. Running both: launch llama-server with `--port 8081` and
+  pass `--host localhost:8081`.
+
+### LM Studio
+
+```
+OffTheWire --backend lmstudio
+```
+
+Enable the local server in LM Studio's Developer tab and load a model. The
+context ceiling is whatever the loaded model was configured with in LM
+Studio; `--context` sets the agent's budget. If several models are loaded,
+the first is used — choose explicitly with `--model`.
+
+Both backends are loopback-only, exactly like Ollama: `--host` refuses any
+address that is not this machine, and `scripts/verify_offline.py` proves it
+for every backend. Model management (`ollama pull`, the VRAM-aware picker,
+`/maxtokens` reloads) remains Ollama-only, because the OpenAI-compatible
+API has no equivalent — the server owns its model. Vision (image
+attachments) is currently not offered through these backends.
+
+---
+
 ## Security model
 
 Containment is enforced in code, not by convention, and
@@ -317,8 +373,10 @@ source file for stray network destinations and networking imports.
 
 **The model path accepts only loopback.** `normalize_host()` in
 `ollama_client.py` raises `NonLocalHostError` for any non-loopback host, and
-it is the single place the HTTP client is constructed — no call site can opt
-out, including via the `OLLAMA_HOST` environment variable. Prompts, code, and
+every model client — Ollama and the OpenAI-compatible backends alike —
+validates its address through it at construction. No call site can opt out,
+including via the `OLLAMA_HOST` environment variable or `--host`. Prompts,
+code, and
 files never leave the machine. There is no telemetry, crash reporting, update
 check, or account.
 
@@ -648,6 +706,7 @@ assets/               logo and branding
 src/
   agent.py            agent loop, REPL, thinking policy
   ollama_client.py    async Ollama client: loopback guard, timing, think toggle
+  openai_compat.py    llama.cpp / LM Studio client behind the same guard
   models.py           model listing, inspection, load/unload, benchmarking
   server.py           MCP stdio server
   tools.py            agent tools: read / write / edit / find / search / shell
@@ -722,6 +781,7 @@ Notes:
 
 ```powershell
 .venv\Scripts\python.exe scripts\test_accounting.py    # context budget and compaction
+.venv\Scripts\python.exe scripts\test_backends.py      # llama.cpp / LM Studio client, translation, SSE
 .venv\Scripts\python.exe scripts\test_images.py        # image handling and persistence
 .venv\Scripts\python.exe scripts\test_repl_input.py    # input handling via a real PromptSession
 .venv\Scripts\python.exe scripts\test_websearch.py     # source ranking, refusal detection, SSRF guard
@@ -746,8 +806,9 @@ additionally exercises the MCP server against a live Ollama instance.
 - MCP client support in the agent, for consuming `server.py` and
   third-party MCP servers
 - Parallel tool execution within a step
-- Additional backends (LM Studio, llama.cpp) via their OpenAI-compatible
-  APIs
+- Vision (image attachments) through the llama.cpp and LM Studio backends
+- A launch helper that resolves an installed Ollama model's GGUF and starts
+  `llama-server` with speculative decoding configured ("turbo mode")
 
 ---
 

@@ -221,11 +221,46 @@ def check_egress_optin() -> int:
     return failures
 
 
+def check_backend_guard() -> int:
+    """The OpenAI-compat backends must sit behind the same loopback guard.
+
+    A second client class is a second chance to forget the rule, so it is
+    proven here independently rather than assumed from code sharing.
+    """
+    print("\n5. OpenAI-compat backends (llama.cpp / LM Studio)")
+    from openai_compat import BACKENDS, OpenAICompatClient
+
+    failures = 0
+    for backend in BACKENDS:
+        try:
+            c = OpenAICompatClient(backend)
+            local = any(h in c.host for h in ("localhost", "127.0.0.1", "[::1]"))
+            if local:
+                print(f"{PASS} {backend} default host is loopback ({c.host})")
+            else:
+                print(f"{FAIL} {backend} default host is NOT loopback: {c.host}")
+                failures += 1
+        except Exception as e:
+            print(f"{FAIL} {backend} client failed to construct: {e}")
+            failures += 1
+
+        try:
+            c = OpenAICompatClient(backend, "http://exfil.example.com")  # offline-fixture
+            print(f"{FAIL} {backend} ACCEPTED a remote host -> {c.host}")
+            failures += 1
+        except NonLocalHostError:
+            print(f"{PASS} {backend} refuses a remote host")
+    return failures
+
+
 def main() -> int:
     print("=" * 70)
     print("OFFLINE VERIFICATION")
     print("=" * 70)
-    failures = check_guard() + check_urls() + check_imports() + check_egress_optin()
+    failures = (
+        check_guard() + check_urls() + check_imports() + check_egress_optin()
+        + check_backend_guard()
+    )
     print("\n" + "=" * 70)
     if failures:
         print(f"{failures} CHECK(S) FAILED - egress may not be contained.")

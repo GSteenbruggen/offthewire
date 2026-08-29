@@ -37,6 +37,7 @@ from _version import __version__  # noqa: E402
 import models as M  # noqa: E402
 import paths  # noqa: E402
 from ollama_client import GenResult, NonLocalHostError, OllamaClient  # noqa: E402
+from openai_compat import BACKENDS, OpenAICompatClient  # noqa: E402
 from repl_input import InputReader, clean_input, summarize_input  # noqa: E402
 from environment import (  # noqa: E402
     describe_delta, probe_static, probe_volatile, static_block, volatile_block,
@@ -492,6 +493,15 @@ class Agent:
         self.session.context_limit = target
         if self.web is not None:
             self.web.context_length = target
+
+        if getattr(self.client, "context_is_fixed", False):
+            # llama.cpp / LM Studio size the window at server launch; only
+            # the budget this side can move. Saying so beats pretending.
+            ui.note(
+                f"context budget {before:,} → {target:,} tokens. The server's "
+                "real window is set at launch; restart it to change that."
+            )
+            return
 
         ui.note(f"context {before:,} → {target:,} tokens · reloading the model…")
         try:
@@ -1521,6 +1531,18 @@ async def main() -> int:
         "sends a plain boolean for models that reject effort levels. "
         f"Default {DEFAULT_THINK_LEVEL}.",
     )
+    ap.add_argument(
+        "--backend",
+        choices=["ollama", *BACKENDS],
+        default="ollama",
+        help="Model server to drive: ollama (default), llamacpp (llama-server "
+        "with --jinja, port 8080), or lmstudio (port 1234). All loopback-only.",
+    )
+    ap.add_argument(
+        "--host",
+        help="Server address override; must resolve to this machine. "
+        "Defaults per backend.",
+    )
     ap.add_argument("--yes", action="store_true", help="Auto-approve writes and commands.")
     ap.add_argument(
         "--save",
@@ -1587,18 +1609,48 @@ async def main() -> int:
         print(f"{DIM}debug log: {log_path}{RESET}")
 
     try:
-        client = OllamaClient()
+        if args.backend == "ollama":
+            client = OllamaClient(args.host)
+        else:
+            client = OpenAICompatClient(args.backend, args.host)
     except NonLocalHostError as e:
         print(f"{RED}{e}{RESET}")
         return 2
 
+    backend_label = (
+        "Ollama" if args.backend == "ollama" else BACKENDS[args.backend]["label"]
+    )
     if not await client.ping():
-        print(f"{RED}Ollama is not reachable at {client.host}. Start it and retry.{RESET}")
+        print(f"{RED}{backend_label} is not reachable at {client.host}.{RESET}")
+        hint = (
+            "Start it and retry."
+            if args.backend == "ollama"
+            else BACKENDS[args.backend]["hint"]
+        )
+        print(f"{DIM}{hint}{RESET}")
         return 2
 
-    model = args.model or await pick_model(client)
-    if not model:
-        return 2
+    if args.backend == "ollama":
+        model = args.model or await pick_model(client)
+        if not model:
+            return 2
+    else:
+        # These servers hold what they were launched with; there is nothing
+        # to pull and usually exactly one choice.
+        served = [m["name"] for m in await client.list_models()]
+        model = args.model or (served[0] if served else "")
+        if not model:
+            print(f"{RED}{backend_label} reports no loaded model.{RESET}")
+            print(f"{DIM}{BACKENDS[args.backend]['hint']}{RESET}")
+            return 2
+        if not args.model and len(served) > 1:
+            print(f"{DIM}serving {len(served)} models; using {model} "
+                  f"(choose another with --model){RESET}")
+        # A server without tool support fails mid-conversation with a raw
+        # 500; one probe request turns that into a sentence at startup.
+        if err := await client.probe_tools(model):
+            print(f"{RED}{err}{RESET}")
+            return 2
 
     # A typo'd --model used to surface as a raw httpx 404 traceback. Tolerable
     # when you have the source open; not when the program arrived as an

@@ -44,7 +44,7 @@ jobs:
         shell: bash
         run: |
           set -e
-          for t in test_images test_accounting test_repl_input test_environment test_ask test_websearch test_interrupt test_tools test_models test_docs verify_offline; do
+          for t in test_images test_accounting test_repl_input test_environment test_ask test_websearch test_interrupt test_tools test_models test_backends test_docs verify_offline; do
             echo "===== $t ====="
             python scripts/$t.py
           done

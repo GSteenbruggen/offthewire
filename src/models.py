@@ -57,7 +57,13 @@ async def model_capabilities(client: OllamaClient, model: str) -> dict[str, Any]
 
     ``supports_tools`` is the gate for agent use -- a model without it cannot
     drive a tool loop no matter how good it is at prose.
+
+    A client that knows its own answer (the OpenAI-compat backends, whose
+    API has no /api/show) supplies it directly; the Ollama path below reads
+    the model card.
     """
+    if hasattr(client, "capabilities"):
+        return await client.capabilities(model)
     info = await client.show(model)
     caps = info.get("capabilities") or []
     model_info = info.get("model_info") or {}

@@ -40,16 +40,20 @@ class NonLocalHostError(RuntimeError):
     """Raised when configuration points anywhere but this machine."""
 
 
-def normalize_host(host: str | None = None) -> str:
+def normalize_host(host: str | None = None, *, default_port: str = "11434") -> str:
     """Turn any of the shapes people put in OLLAMA_HOST into a base URL.
 
     Ollama's own convention is a bare ``localhost`` or ``host:port``, which is
     not a valid URL. Goose's config had exactly this problem.
 
+    ``default_port`` fills in when the host string names none -- other
+    backends (llama.cpp, LM Studio) listen elsewhere and share this
+    validation, loopback check included.
+
     Raises:
         NonLocalHostError: if the resulting host is not loopback.
     """
-    host = host or os.environ.get("OLLAMA_HOST") or "http://localhost:11434"
+    host = host or os.environ.get("OLLAMA_HOST") or f"http://localhost:{default_port}"
     host = host.strip()
     if not host.startswith(("http://", "https://")):
         host = "http://" + host
@@ -78,7 +82,7 @@ def normalize_host(host: str | None = None) -> str:
             f"{', '.join(sorted(LOOPBACK_HOSTS))}."
         )
 
-    return f"{scheme}//{hostname}:{port or '11434'}"
+    return f"{scheme}//{hostname}:{port or default_port}"
 
 
 @dataclass
