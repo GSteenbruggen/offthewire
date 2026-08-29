@@ -284,10 +284,15 @@ def test_step_cap_and_unlimited() -> None:
         asyncio.run(agent.run_turn("go"))
         return client.calls
 
-    check("default cap binds at its limit", run(25, rounds=30) == 25)
+    check("explicit cap binds at its limit", run(25, rounds=30) == 25)
     check("small cap binds too", run(5, rounds=30) == 5)
     check("unlimited runs to natural completion", run(0, rounds=30) == 31,
           "30 tool rounds + the finishing reply")
+
+    agent = Agent(FakeClient(0), "m", Workspace(root), interactive=False,
+                  auto_approve=True)
+    check("the default is unlimited", agent.max_steps == 0,
+          f"max_steps={agent.max_steps}")
 
 
 def test_context_limit_recovery() -> None:
@@ -368,6 +373,97 @@ def test_context_limit_recovery() -> None:
           f"chats={client.chats} summaries={client.summaries}")
 
 
+def test_midturn_compaction_uncapped() -> None:
+    """A long turn compacts as often as the context fills.
+
+    The old 2-per-turn cap made sense at 25 steps and starves an unlimited
+    turn: step 60 of a long refactor deserves the same rescue as step 3. The
+    loop protection is futility, not a count -- a compaction that ends still
+    over budget is not retried until enough new messages have aged past the
+    keep-window to give it fresh material.
+    """
+    from agent import Agent
+    from session import KEEP_RECENT_MESSAGES
+
+    print("\n8. Mid-turn compaction, uncapped")
+
+    class FakeResult:
+        def __init__(self, tool_calls, prompt_tokens):
+            self.content = "" if tool_calls else "done"
+            self.thinking = ""
+            self.tool_calls = tool_calls
+            self.done_reason = ""
+            self.prompt_tokens = prompt_tokens
+            self.gen_tokens = 5
+            self.gen_tps = 1.0
+            self.total_s = 0.1
+
+    class FakeClient:
+        """Reports a nearly-full window after every reply, so the pre-step
+        check sees needs_compaction() before each subsequent step."""
+
+        def __init__(self, rounds, prompt_tokens=30_000):
+            self.rounds = rounds
+            self.prompt_tokens = prompt_tokens
+            self.chats = 0
+            self.summaries = 0
+
+        async def chat_stream(self, model, messages, **kw):
+            self.chats += 1
+            calls = (
+                [{"function": {"name": "read_file",
+                               "arguments": {"path": "f.txt",
+                                             "start_line": self.chats}}}]
+                if self.chats <= self.rounds else []
+            )
+            return FakeResult(calls, self.prompt_tokens)
+
+        async def generate(self, model, prompt, **kw):  # compaction pass
+            self.summaries += 1
+
+            class R:
+                content = "summary of earlier work"
+                gen_tokens = 10
+                total_s = 0.1
+
+            return R()
+
+    root = Path(tempfile.mkdtemp(prefix="otw-midcompact-"))
+    (root / "f.txt").write_text("line\n" * 50)
+
+    def run(rounds, seed_chars=200):
+        client = FakeClient(rounds)
+        agent = Agent(client, "m", Workspace(root), interactive=False,
+                      auto_approve=True)
+        for i in range(10):
+            agent.session.messages.append(
+                {"role": "user" if i % 2 == 0 else "assistant",
+                 "content": "x" * seed_chars})
+        asyncio.run(agent.run_turn("go"))
+        return client, agent
+
+    # Every reply reports ~91% of the window, so every pre-step check wants
+    # a compaction; each one succeeds (the fake summary is tiny). Five tool
+    # rounds must therefore compact five times -- more than double the old
+    # per-turn cap of two.
+    client, agent = run(rounds=5)
+    check("compaction is not capped per turn", agent.session.compactions >= 3,
+          f"{agent.session.compactions} compactions across 5 rounds")
+    check("the turn still completes", client.chats == 6, f"{client.chats} calls")
+
+    # Futility: recent messages so large that even after folding the older
+    # ones the estimate stays over budget. The first compaction runs and
+    # fails to free space; two tool rounds add only four messages -- fewer
+    # than the keep-window -- so it must NOT be retried within this turn.
+    assert 2 * 2 < KEEP_RECENT_MESSAGES, "rounds chosen to stay below the retry bar"
+    client, agent = run(rounds=2, seed_chars=200_000)
+    check("futile compaction is not retried immediately",
+          agent.session.compactions == 1,
+          f"{agent.session.compactions} compactions across 2 rounds")
+    check("the turn is never blocked by futility", client.chats == 3,
+          f"{client.chats} calls")
+
+
 def main() -> int:
     print("=" * 68)
     print("WORKSPACE AND COMMAND TESTS")
@@ -379,6 +475,7 @@ def main() -> int:
     test_workspace_memory()
     test_step_cap_and_unlimited()
     test_context_limit_recovery()
+    test_midturn_compaction_uncapped()
     print("\n" + "=" * 68)
     print("All workspace/command tests passed." if not failures else f"{failures} FAILED.")
     print("=" * 68)

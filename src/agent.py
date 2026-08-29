@@ -42,8 +42,8 @@ from environment import (  # noqa: E402
     describe_delta, probe_static, probe_volatile, static_block, volatile_block,
 )
 from session import (  # noqa: E402
-    COMPACT_AT, Session, estimate_tokens, find_session, latest_session,
-    list_sessions,
+    COMPACT_AT, KEEP_RECENT_MESSAGES, Session, estimate_tokens, find_session,
+    latest_session, list_sessions,
 )
 import transcript as T  # noqa: E402
 import ui  # noqa: E402
@@ -51,7 +51,11 @@ from tools import ToolRegistry, Workspace  # noqa: E402
 from websearch import DEFAULT_SEARXNG, WebSearch  # noqa: E402
 
 DEFAULT_CONTEXT = 32768
-MAX_STEPS_PER_TURN = 25
+# 0 means uncapped, and uncapped is the default: Ctrl+C reliably kills a
+# running command's whole process tree and the repeated-call guard refuses
+# genuine loops, so an arbitrary step ceiling only interrupts honest work.
+# /maxsteps N restores a cap for anyone who wants one.
+MAX_STEPS_PER_TURN = 0
 
 # ANSI codes live in transcript.py; Windows Terminal and VS Code handle these.
 from transcript import BLUE, BOLD, DIM, GREEN, RED, RESET, YELLOW  # noqa: E402
@@ -881,7 +885,12 @@ class Agent:
         self.session.append(message)
 
         last_tool_failed = False
-        compactions_this_turn = 0
+        # Message count at the last compaction that failed to get back under
+        # budget, or None. A futile compaction is not retried until enough new
+        # messages have aged past the keep-window to give it something new to
+        # fold -- retrying sooner would re-summarize the same summary and burn
+        # minutes of local inference for nothing.
+        futile_at: int | None = None
         # One self-recovery from a context-truncated reply per turn: compact,
         # ask the model to pick up where it stopped, and never loop on it.
         length_recoveries = 0
@@ -912,13 +921,33 @@ class Agent:
             # At the top it covers both, and still covers the original case:
             # checking before step N+1 is the same moment as checking after
             # step N.
-            if self.session.needs_compaction() and compactions_this_turn < 2:
-                compactions_this_turn += 1
+            #
+            # No per-turn cap: with unlimited steps the default, a long turn
+            # legitimately needs to compact many times. The guard against a
+            # compaction *loop* is futility-based instead -- a pass that ends
+            # still over budget is not repeated until the conversation has
+            # grown enough to give the next one fresh material.
+            if (
+                self.session.needs_compaction()
+                and self.session.can_compact()
+                and (
+                    futile_at is None
+                    or len(self.session.messages) >= futile_at + KEEP_RECENT_MESSAGES
+                )
+            ):
                 print(f"{YELLOW}  context {self.session.budget_line()} -- compacting{RESET}")
                 print(f"{DIM}  {await self.session.compact(self.client, on_progress=ui.note)}{RESET}")
                 # Compaction summarizes older turns away, which can take the
                 # environment block with it. Re-inject on the next turn.
                 self._env_injected = False
+                if self.session.needs_compaction():
+                    futile_at = len(self.session.messages)
+                    ui.warn(
+                        "still over budget after compacting — recent messages "
+                        "are too large to fold; /maxtokens raises the window"
+                    )
+                else:
+                    futile_at = None
 
             think, why = self.policy.decide(
                 step=step, last_tool_failed=last_tool_failed, is_first_step=(step == 1)
@@ -1114,10 +1143,10 @@ class Agent:
 
             # The compaction check now happens at the top of the next
             # iteration, which is the same moment as here but also catches the
-            # cases this position could not. `compactions_this_turn` still caps
-            # it per turn: the stale-measurement fix in Session is what
-            # actually prevents a compaction loop, but a runaway here would
-            # burn minutes of local inference before anyone noticed.
+            # cases this position could not. The futility guard up there is
+            # what prevents a compaction loop: a pass that ends still over
+            # budget is not retried until the turn has produced new foldable
+            # history.
         else:
             stuck = [s for s, (n, _) in call_counts.items() if n >= 3]
             ui.warn(f"stopped after {self.max_steps} steps — the task is unfinished.")
@@ -1196,7 +1225,7 @@ HELP = f"""{BOLD}commands{RESET}
   /folder [path]     show or change the working directory (remembered next launch)
   /web [on|off]      toggle internet lookup; bare /web shows status and queries
   /maxtokens [n]     show or change the context window, e.g. /maxtokens 64k
-  /maxsteps [n]      tool-call limit per turn; 'unlimited' (or 0) removes it
+  /maxsteps [n]      tool-call limit per turn; unlimited by default, a number caps it
   /tokens            context usage right now
   /compact           summarize older turns to free context
   /history [full]    replay this conversation ("full" adds tool calls/results)
@@ -1504,8 +1533,8 @@ async def main() -> int:
         "--max-steps",
         type=int,
         default=MAX_STEPS_PER_TURN,
-        help=f"Tool calls allowed per turn, default {MAX_STEPS_PER_TURN}; "
-        "0 removes the cap.",
+        help="Tool calls allowed per turn; default unlimited. Pass a number "
+        "to cap it.",
     )
     ap.add_argument(
         "--hide-reasoning",
