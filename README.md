@@ -30,7 +30,7 @@ paired with smaller local models. OffTheWire was designed specifically for
 this environment: local execution is treated as a system-level constraint,
 and the agent is tuned around the realities of Ollama models running on
 consumer and workstation hardware. The result is a coding agent built for
-environments where privacy, control, and independence from the cloud are
+environments where privacy, control, and independence from the internet are
 first-class requirements.
 
 **How it differs from similar tools:**
