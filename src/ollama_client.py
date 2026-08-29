@@ -26,7 +26,13 @@ from typing import Any, Callable
 
 import httpx
 
-DEFAULT_TIMEOUT = 600.0
+# No read timeout, deliberately. A large model with layers on CPU sends
+# nothing while it processes a long prompt, and on real hardware that
+# silence legitimately exceeds any number chosen here -- a 600s limit was
+# observed killing an honest 27B turn mid-computation. Slowness is normal
+# for a local server and Ctrl+C already covers genuine hangs; what must
+# fail fast is *connecting* to a server that is not there.
+DEFAULT_TIMEOUT = httpx.Timeout(connect=10.0, read=None, write=600.0, pool=600.0)
 
 # This project is offline-only by design. Every outbound request must terminate
 # on this machine, so the host is checked against a loopback allowlist and a
@@ -132,7 +138,9 @@ class GenResult:
 class OllamaClient:
     """Async wrapper over the endpoints we actually need."""
 
-    def __init__(self, host: str | None = None, timeout: float = DEFAULT_TIMEOUT):
+    def __init__(
+        self, host: str | None = None, timeout: float | httpx.Timeout = DEFAULT_TIMEOUT
+    ):
         self.host = normalize_host(host)
         self._timeout = timeout
 

@@ -77,6 +77,16 @@ def test_loopback_guard() -> None:
     except ValueError:
         check("unknown backend refused", True)
 
+    # A local model sends nothing while it processes a long prompt, and on
+    # spilled-to-CPU hardware that silence exceeds any finite limit -- a
+    # 600s read timeout was observed killing an honest 27B turn. The read
+    # timeout must stay off for every backend.
+    from ollama_client import DEFAULT_TIMEOUT
+
+    check("no read timeout on local inference", DEFAULT_TIMEOUT.read is None)
+    check("connecting still fails fast",
+          (DEFAULT_TIMEOUT.connect or 999) <= 30, str(DEFAULT_TIMEOUT.connect))
+
 
 def test_message_translation() -> None:
     print("\n2. Message translation")

@@ -154,7 +154,7 @@ class OpenAICompatClient:
         self,
         backend: str = "llamacpp",
         host: str | None = None,
-        timeout: float = DEFAULT_TIMEOUT,
+        timeout: float | httpx.Timeout = DEFAULT_TIMEOUT,
     ):
         if backend not in BACKENDS:
             raise ValueError(f"unknown backend {backend!r}; expected one of {sorted(BACKENDS)}")
