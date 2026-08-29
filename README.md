@@ -3,11 +3,11 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/GSteenbruggen/offthewire/releases/download/v1.4.1/OffTheWire-Setup-1.4.1.exe"><strong>Windows (x64)</strong></a>
+  <a href="https://github.com/GSteenbruggen/offthewire/releases/download/v1.4.2/OffTheWire-Setup-1.4.2.exe"><strong>Windows (x64)</strong></a>
   ·
-  <a href="https://github.com/GSteenbruggen/offthewire/releases/download/v1.4.1/OffTheWire-1.4.1-linux-x86_64.tar.gz"><strong>Linux (x86_64)</strong></a>
+  <a href="https://github.com/GSteenbruggen/offthewire/releases/download/v1.4.2/OffTheWire-1.4.2-linux-x86_64.tar.gz"><strong>Linux (x86_64)</strong></a>
   ·
-  <a href="https://github.com/GSteenbruggen/offthewire/releases/download/v1.4.1/OffTheWire-1.4.1-macos-arm64.tar.gz"><strong>macOS (Apple&nbsp;Silicon)</strong></a>
+  <a href="https://github.com/GSteenbruggen/offthewire/releases/download/v1.4.2/OffTheWire-1.4.2-macos-arm64.tar.gz"><strong>macOS (Apple&nbsp;Silicon)</strong></a>
   <br>
   <sub>Windows: installer, per-user, no administrator · Linux and macOS: self-contained tarballs · <a href="https://github.com/GSteenbruggen/offthewire/releases">all releases</a></sub>
 </p>
@@ -140,7 +140,7 @@ gigabytes; both must be installed independently.
 ### Linux
 
 ```bash
-tar -xzf OffTheWire-1.4.1-linux-x86_64.tar.gz
+tar -xzf OffTheWire-1.4.2-linux-x86_64.tar.gz
 ./OffTheWire/OffTheWire            # the current directory becomes the workspace
 ```
 
@@ -152,8 +152,8 @@ attach by typed path or drag-and-drop. Web lookup uses
 ### macOS (Apple Silicon)
 
 ```bash
-curl -LO https://github.com/GSteenbruggen/offthewire/releases/download/v1.4.1/OffTheWire-1.4.1-macos-arm64.tar.gz
-tar -xzf OffTheWire-1.4.1-macos-arm64.tar.gz
+curl -LO https://github.com/GSteenbruggen/offthewire/releases/download/v1.4.2/OffTheWire-1.4.2-macos-arm64.tar.gz
+tar -xzf OffTheWire-1.4.2-macos-arm64.tar.gz
 ./OffTheWire/OffTheWire
 ```
 

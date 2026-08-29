@@ -5,4 +5,4 @@ test enforces it, so bumping the version is a one-line change that CI refuses
 to let drift.
 """
 
-__version__ = "1.4.1"
+__version__ = "1.4.2"
