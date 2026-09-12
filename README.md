@@ -223,7 +223,9 @@ OffTheWire [workspace] [options]
 | `--host URL` | Server address override. Must resolve to this machine — the loopback guard applies to every backend. |
 | `--turbo` | Launch `llama-server` on the model's own GGUF automatically — CUDA environment, GPU layer fit, speculative decoding when the model has an MTP draft head. See [Turbo mode](#turbo-mode). |
 | `--gpu-layers N` | With `--turbo`: override the estimated GPU layer count. |
-| `--context N` | Context window in tokens. Default 32768, capped to the model's maximum. |
+| `--tensor-split A,B` | With `--turbo` on several GPUs: proportion of layers per card in device order (`3,2` puts 60% on GPU 0). Default splits by free memory. |
+| `--main-gpu N` | With `--turbo` on several GPUs: the card that holds the small tensors and scratch buffers. |
+| `--context N\|auto` | Context window in tokens (`64k` works), capped to the model's maximum. Default 32768. `auto` picks the largest window the model runs fully on GPU at — see [Context window](#context-window). |
 | `--think auto\|always\|never` | When to enable reasoning. Default `auto`. |
 | `--think-level low\|medium\|high\|max\|default` | Reasoning effort when a turn does think. Default `low`; `default` sends a plain boolean for models without effort levels. |
 | `--yes` | Auto-approve file writes and shell commands. |
@@ -295,6 +297,34 @@ retained and annotated so the model does not resume the cancelled answer.
 not processed during a long-running shell command until it completes or
 reaches its 120 s timeout.
 
+### Context window
+
+The KV cache grows with the window out of the same VRAM as the weights, so
+the right window is a property of the machine and the model together, and
+no fixed default is right for both a 16 GB card and a 16 + 12 GB pair. The
+default stays at 32768 because it is the floor every machine handles;
+`--context auto` finds the larger number when there is one.
+
+`auto` works in two stages. The model card gives the KV cost per token
+(attention layers × KV heads × head size — hybrid architectures such as
+`qwen3.8` keep a cache on only one layer in four, which a naive formula
+overstates four-fold), and `nvidia-smi` gives the pooled VRAM across every
+NVIDIA card. Together they pick a starting rung on the ladder
+131k → 98k → 64k → 48k → 32k. The model is then loaded there and Ollama's
+own placement report is the verdict: a rung that spills any layer to CPU
+steps down. The load is not wasted work — the first request would load the
+model at that size anyway, and Ollama keeps it resident.
+
+Under `--turbo` the estimate alone decides, since `llama-server` sizes its
+window at launch and always runs a q8_0 cache (half the size). The
+llama.cpp and LM Studio backends own their window; `auto` there falls back
+to the default budget.
+
+On the reference machine (16 + 12 GB, `qwen3.8:27b`) `auto` resolves to
+49,152 under Ollama: 57,344 already spills 5% to CPU, and 131,072 spills
+28%. The same model on the 16 GB card alone could not hold its weights at
+any window.
+
 ### Example session
 
 Given a `calc.py` in which `add()` returns `a - b` and a failing test:
@@ -361,12 +391,21 @@ GPU, fits the number of offloaded layers to measured free VRAM, launches on
 a free local port, waits for the model to load, and connects. Quitting
 OffTheWire stops the server and frees the VRAM.
 
-Two decisions are made from the GGUF's own metadata: the layer count (for
-the VRAM fit — override with `--gpu-layers N`) and whether the model
+Three decisions are made from the GGUF's own metadata: the layer count (for
+the VRAM fit — override with `--gpu-layers N`), the KV cache cost per token
+(for `--context auto`, which sizes the window to what fits alongside the
+weights with the q8_0 cache turbo always uses), and whether the model
 carries an MTP draft head, which enables speculative decoding
 (`--spec-type draft-mtp`) automatically. On models with the head, measured
 generation speed improved 1.27× over the same model under Ollama; models
 without it run at parity, so there is no penalty for trying.
+
+On a machine with several NVIDIA cards the fit pools their memory and
+charges each card past the first its own scratch buffers, and llama-server
+splits layers across them by free memory. `--tensor-split 3,2` fixes the
+proportion per card instead, and `--main-gpu 0` names the card that holds
+the small tensors and compute scratch — the faster card is the usual
+choice when the two differ.
 
 If another model is resident in Ollama and the target does not fit in the
 VRAM left over, turbo asks Ollama to unload it first (Ollama reloads it
@@ -572,7 +611,8 @@ of agent search failing with 403 responses.
 
 ### Condensation
 
-A web page is 5,000–15,000 tokens; two would exhaust a 32k session. Fetched
+A web page is 5,000–15,000 tokens; two would exhaust a 32k session and
+four a 64k one. Fetched
 pages are stripped to article text and reduced by the local model to a short
 digest (~200 tokens per source) that answers the query. Page content is
 processed entirely locally. A representative documentation query returned a
@@ -619,7 +659,17 @@ Decisions specific to running agents on small local models:
 - **Explicit context length.** Ollama loads models with a 4096-token window
   regardless of the model's capability and truncates silently beyond it. The
   agent always sends `num_ctx`, and `/maxtokens` reloads the model at a new
-  size, reporting the resulting GPU/CPU split.
+  size, reporting the resulting GPU/CPU split. See
+  [Context window](#context-window) for how `auto` chooses.
+- **Compaction keeps a reserve, not a ratio.** Older turns are summarised
+  when the window has fewer free tokens than one reply plus one maximum
+  tool result. That cost is the same at every window size, so a fixed
+  share (the original 75%) idled 12k tokens of a 48k window and would have
+  idled 64k of 256k. The reserve is derived from the tool-output cap so the
+  two cannot disagree.
+- **Tool output scales with the window.** Results truncate at roughly 10%
+  of the context (floor 12,000 characters, ceiling 64,000), so a machine
+  that can hold 128k gets a bigger `read_file`, not the same slice.
 - **Line-range edits rather than string replacement.** Local models
   reproduce whitespace unreliably; addressing lines by number is more
   robust, and `read_file` numbers its output accordingly.
@@ -672,18 +722,24 @@ are surfaced when present.
 ## Benchmarks
 
 All figures in this document were measured on a single reference
-configuration: Windows 11 x64, RTX 4070 Ti SUPER (16 GB VRAM),
-`qwen3.8:27b` (27.3B, Q4_K_M) at 32k context, Ollama 0.32.5,
-Python 3.11.9. Results vary with hardware, model, and quantization;
-`scripts/benchmark.py` reproduces them on any setup.
+configuration: Windows 11 x64, RTX 4070 Ti SUPER (16 GB) + RTX 3060
+(12 GB), `qwen3.8:27b` (27.3B, Q4_K_M), Ollama 0.34.0, Python 3.11.9.
+Results vary with hardware, model, and quantization; `scripts/benchmark.py`
+reproduces them on any setup. Figures in the thinking-cost table below
+predate the second card and were measured on the 16 GB card alone.
 
 ```
 qwen3.8:27b  27.3B Q4_K_M, 32k context
-  10.9 GB of 17.6 GB in VRAM (62% GPU)
+  19.3 GB of 19.3 GB in VRAM (100% GPU: 9.2 GB on the 4070, 6.1 GB on the 3060)
 
-  generation       19.5 tok/s  (mean of 3 runs)
-  prompt ingest     721 tok/s  (9,024 uncached tokens; 2,400-3,900 tok/s warm)
+  generation       52.0 tok/s  (2,500-token reply, warm)
 ```
+
+Before the second card, the same model at 32k context ran 62% on GPU
+(10.9 GB of 17.6 GB in VRAM) at 19.5 tok/s generation and 721 tok/s prompt
+ingest. Ollama splits the layers across both cards, so the gain is not the
+second card's compute but the whole model leaving system RAM. Prompt
+ingest has not been re-measured on the two-card configuration.
 
 Reasoning cost by prompt class:
 
@@ -696,10 +752,24 @@ Reasoning cost by prompt class:
 The mechanical row is the shape of most agent turns — select a tool, read a
 result, make an edit — and motivates the default thinking policy.
 
-Context window cost: doubling the window from 32k to 64k added 3.8 GB of KV
-cache and reduced GPU residency from 79% to 63% on the reference
-configuration. `OLLAMA_FLASH_ATTENTION=1` with `OLLAMA_KV_CACHE_TYPE=q8_0`
-approximately halves KV cache memory.
+Context window cost, measured on the two-card configuration by loading the
+model at each size and reading Ollama's placement:
+
+| Context | Placement |
+|---|---|
+| 32,768 | 100% GPU |
+| 49,152 | 100% GPU — what `--context auto` picks |
+| 57,344 | 5% CPU |
+| 65,536 | 8% CPU |
+| 131,072 | 28% CPU |
+| 262,144 | 50% CPU (the model's maximum) |
+
+The KV cache costs 64 KB per token on this model (2 GB at 32k), and once
+anything spills, Ollama's fitter leaves roughly 4 GB of the second card
+idle, so a partially resident model is slower than the raw VRAM total
+suggests. `OLLAMA_FLASH_ATTENTION=1` with `OLLAMA_KV_CACHE_TYPE=q8_0`
+approximately halves the cache and moves every threshold up; the agent's
+"% on CPU" warning names that setting.
 
 ---
 
@@ -736,8 +806,8 @@ src/
   agent.py            agent loop, REPL, thinking policy
   ollama_client.py    async Ollama client: loopback guard, timing, think toggle
   openai_compat.py    llama.cpp / LM Studio client behind the same guard
-  turbo.py            one-command llama-server launch: GGUF metadata, VRAM fit
-  models.py           model listing, inspection, load/unload, benchmarking
+  turbo.py            one-command llama-server launch: GGUF metadata, multi-GPU VRAM fit
+  models.py           model listing, inspection, KV-cache and context fit, benchmarking
   server.py           MCP stdio server
   tools.py            agent tools: read / write / edit / find / search / shell
   session.py          persistence, token accounting, compaction
@@ -812,7 +882,7 @@ Notes:
 ```powershell
 .venv\Scripts\python.exe scripts\test_accounting.py    # context budget and compaction
 .venv\Scripts\python.exe scripts\test_backends.py      # llama.cpp / LM Studio client, translation, SSE
-.venv\Scripts\python.exe scripts\test_turbo.py         # GGUF metadata, manifest resolution, VRAM fit
+.venv\Scripts\python.exe scripts\test_turbo.py         # GGUF metadata, manifest resolution, multi-GPU layer fit
 .venv\Scripts\python.exe scripts\test_images.py        # image handling and persistence
 .venv\Scripts\python.exe scripts\test_repl_input.py    # input handling via a real PromptSession
 .venv\Scripts\python.exe scripts\test_websearch.py     # source ranking, refusal detection, SSRF guard
@@ -820,7 +890,7 @@ Notes:
 .venv\Scripts\python.exe scripts\test_interrupt.py     # interrupt handling
 .venv\Scripts\python.exe scripts\test_ask.py           # clarifying-question tool
 .venv\Scripts\python.exe scripts\test_tools.py         # workspace confinement, command kill-tree
-.venv\Scripts\python.exe scripts\test_models.py        # VRAM-aware model selection
+.venv\Scripts\python.exe scripts\test_models.py        # VRAM-aware model selection, KV estimate, context ladder
 .venv\Scripts\python.exe scripts\test_docs.py          # /help-vs-README and version drift
 .venv\Scripts\python.exe scripts\verify_offline.py     # containment verification
 ```
@@ -838,7 +908,8 @@ additionally exercises the MCP server against a live Ollama instance.
   third-party MCP servers
 - Parallel tool execution within a step
 - Vision (image attachments) through the llama.cpp and LM Studio backends
-- Multi-GPU placement control in turbo mode (which card gets which layers)
+- `--context auto` for the llama.cpp and LM Studio backends (their window
+  is fixed at server launch; only turbo can size it)
 
 ---
 

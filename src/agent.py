@@ -26,7 +26,7 @@ import sys
 import tempfile
 import time
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
@@ -43,15 +43,18 @@ from environment import (  # noqa: E402
     describe_delta, probe_static, probe_volatile, static_block, volatile_block,
 )
 from session import (  # noqa: E402
-    COMPACT_AT, KEEP_RECENT_MESSAGES, Session, estimate_tokens, find_session,
+    KEEP_RECENT_MESSAGES, Session, estimate_tokens, find_session,
     latest_session, list_sessions,
 )
 import transcript as T  # noqa: E402
 import ui  # noqa: E402
-from tools import ToolRegistry, Workspace  # noqa: E402
+from tools import ToolRegistry, Workspace, set_output_budget  # noqa: E402
 from websearch import DEFAULT_SEARXNG, WebSearch  # noqa: E402
 
-DEFAULT_CONTEXT = 32768
+# The window used when --context is not given. Kept at the floor of the
+# ladder rather than raised for bigger machines: a fixed default is wrong
+# for every machine but one, and "auto" is how the right one is found.
+DEFAULT_CONTEXT = M.CONTEXT_FLOOR
 # 0 means uncapped, and uncapped is the default: Ctrl+C reliably kills a
 # running command's whole process tree and the repeated-call guard refuses
 # genuine loops, so an arbitrary step ceiling only interrupts honest work.
@@ -368,6 +371,7 @@ class Agent:
         self.model = model
         self.workspace = workspace
         self.context_length = context_length
+        set_output_budget(context_length)
         self.tools = ToolRegistry(workspace)
         self.policy = ThinkingPolicy(thinking, think_level)
         self.auto_approve = auto_approve
@@ -491,6 +495,7 @@ class Agent:
 
         self.context_length = target
         self.session.context_limit = target
+        set_output_budget(target)
         if self.web is not None:
             self.web.context_length = target
 
@@ -1192,8 +1197,97 @@ def resolve_workspace(
     return ".", False
 
 
-async def pick_model(client: OllamaClient) -> str | None:
-    rec = await M.recommend_agent_model(client)
+def parse_context_arg(text: str) -> int | str:
+    """``--context`` accepts a token count (64k works) or the word auto."""
+    if text.strip().lower() == "auto":
+        return "auto"
+    n = parse_tokens(text)
+    if n is None or n <= 0:
+        raise argparse.ArgumentTypeError(
+            f"expected a token count like 32768 or 64k, or 'auto'; got {text!r}"
+        )
+    return n
+
+
+async def resolve_auto_context(
+    client: OllamaClient,
+    model: str,
+    caps: dict[str, Any],
+    note: Callable[[str], None],
+) -> int:
+    """The largest ladder rung the model runs fully on GPU at, verified.
+
+    Two stages. The model card and nvidia-smi give an estimate (fit_context),
+    which decides where on the ladder to *start*; then the model is loaded
+    there and Ollama's own placement report is the verdict. A rung that
+    spills to CPU steps down. The estimate is only a starting point because
+    Ollama's layer fitter has its own margins -- on the reference machine it
+    leaves several GB of the second card idle once anything spills -- and a
+    verified 100% GPU beats a predicted one.
+
+    Loading at the chosen size is not wasted work: the first request would
+    load the model at that num_ctx anyway, and Ollama keeps it resident.
+    """
+    size = 0
+    try:
+        for m in await client.list_models():
+            if (m.get("model") or m.get("name")) == model:
+                size = m.get("size", 0) or 0
+                break
+    except Exception:
+        pass
+    ceiling = caps.get("max_context") or None
+    per_gpu = M.vram_per_gpu()
+    start = M.fit_context(
+        size, caps.get("kv_bytes_per_token"), sum(per_gpu) or None,
+        ceiling=ceiling, n_gpus=len(per_gpu),
+    )
+    rungs = [r for r in M.CONTEXT_LADDER if r <= start]
+    if ceiling:
+        rungs = [min(r, ceiling) for r in rungs]
+    family = model.split(":")[0]
+
+    for rung in rungs:
+        note(f"context auto: loading at {rung:,}…")
+        try:
+            await client.load(model, context_length=rung, keep_alive="30m")
+            loaded = await M.loaded_models(client)
+        except Exception as e:
+            note(f"could not verify placement ({type(e).__name__}); using {rung:,}")
+            return rung
+        pct = next(
+            (e.get("gpu_percent", 0) for e in loaded if e["name"].startswith(family)), None
+        )
+        if pct is None:
+            # Loaded, then gone before we could look: another session is
+            # using a model that cannot share the GPU with this one, and
+            # Ollama evicted ours to bring theirs back. Nothing here can be
+            # verified, so the estimate stands rather than stepping down on
+            # a reading that says nothing about placement.
+            note(
+                f"context auto → {rung:,} tokens (estimate only: the model was "
+                "evicted before placement could be read; another model is in use)"
+            )
+            return rung
+        if pct >= 100:
+            note(f"context auto → {rung:,} tokens, 100% on GPU")
+            return rung
+        if rung == rungs[-1]:
+            note(f"context auto → {rung:,} tokens ({100 - pct}% on CPU; nothing smaller to try)")
+            return rung
+        note(f"  {rung:,}: {100 - pct}% on CPU, stepping down")
+    return M.CONTEXT_FLOOR if not ceiling else min(M.CONTEXT_FLOOR, ceiling)
+
+
+def picker_context(requested: int | str) -> int:
+    """The window the model picker budgets at. For 'auto' that is the ladder
+    floor: the picker runs before the window is resolved, and a model that
+    cannot hold the floor is not a candidate at any size."""
+    return M.CONTEXT_FLOOR if requested == "auto" else int(requested)
+
+
+async def pick_model(client: OllamaClient, context: int = M.CONTEXT_FLOOR) -> str | None:
+    rec = await M.recommend_agent_model(client, context)
     candidates = rec.get("candidates") or []
     if not candidates:
         print(f"{RED}{rec.get('reason')}{RESET}")
@@ -1397,11 +1491,13 @@ async def repl(agent: Agent) -> None:
                     used = agent.session.used_tokens()
                     limit = agent.session.context_limit
                     max_ctx = caps.get("max_context")
+                    at = agent.session.compact_threshold()
                     ui.key_values([
                         ("window", f"{limit:,} tokens"),
                         ("model max", f"{max_ctx:,}" if max_ctx else "?"),
                         ("in use", f"{used:,}  ({100 * used / max(1, limit):.0f}%)"),
-                        ("compacts at", f"{int(limit * COMPACT_AT):,}  ({COMPACT_AT:.0%})"),
+                        ("compacts at", f"{at:,}  ({100 * at / max(1, limit):.0f}%, "
+                                        f"{limit - at:,} reserved for the next reply)"),
                     ])
                     ui.note("/maxtokens 64k   to change it")
                 else:
@@ -1520,7 +1616,16 @@ async def main() -> int:
         "destination in interactive runs, else the current directory.",
     )
     ap.add_argument("--model", help="Skip the picker and use this model.")
-    ap.add_argument("--context", type=int, default=DEFAULT_CONTEXT, help="Context window in tokens.")
+    ap.add_argument(
+        "--context",
+        type=parse_context_arg,
+        default=DEFAULT_CONTEXT,
+        metavar="N|auto",
+        help=f"Context window in tokens (64k works), or 'auto' to pick the "
+        "largest window the model runs fully on GPU at: estimated from the "
+        "model card and measured VRAM, then verified by loading. Default "
+        f"{DEFAULT_CONTEXT}.",
+    )
     ap.add_argument("--think", choices=["auto", "always", "never"], default="auto")
     ap.add_argument(
         "--think-level",
@@ -1556,6 +1661,20 @@ async def main() -> int:
         type=int,
         help="With --turbo: override the estimated number of layers offloaded "
         "to the GPU.",
+    )
+    ap.add_argument(
+        "--tensor-split",
+        metavar="A,B,...",
+        help="With --turbo on several GPUs: proportion of layers per card, in "
+        "device order (e.g. 3,2 puts 60%% on GPU 0). Default splits by free "
+        "memory.",
+    )
+    ap.add_argument(
+        "--main-gpu",
+        type=int,
+        metavar="N",
+        help="With --turbo on several GPUs: the card that holds the small "
+        "tensors and scratch buffers; the faster one is the usual choice.",
     )
     ap.add_argument("--yes", action="store_true", help="Auto-approve writes and commands.")
     ap.add_argument(
@@ -1633,7 +1752,7 @@ async def main() -> int:
             try:
                 probe = OllamaClient()
                 if await probe.ping():
-                    model = await pick_model(probe)
+                    model = await pick_model(probe, picker_context(args.context))
             except NonLocalHostError:
                 pass
             if not model:
@@ -1650,11 +1769,16 @@ async def main() -> int:
                 model,
                 context=args.context,
                 gpu_layers=args.gpu_layers,
+                tensor_split=args.tensor_split,
+                main_gpu=args.main_gpu,
                 note=lambda s: print(f"{DIM}{s}{RESET}"),
             )
         except TB.TurboError as e:
             print(f"{RED}{e}{RESET}")
             return 2
+        # The server sized its window at launch (possibly from "auto"); the
+        # agent's budget must be that number, not the request.
+        args.context = turbo_server.context
         # Every exit path from here on -- including early `return 2`s and
         # unhandled exceptions -- must take the server down with it, or a
         # 17 GB model stays resident in VRAM behind a closed terminal.
@@ -1688,7 +1812,7 @@ async def main() -> int:
         return 2
 
     if args.backend == "ollama":
-        model = args.model or await pick_model(client)
+        model = args.model or await pick_model(client, picker_context(args.context))
         if not model:
             return 2
     else:
@@ -1729,7 +1853,20 @@ async def main() -> int:
         print(f"{RED}{model} does not support tool calling; it cannot drive an agent loop.{RESET}")
         return 2
 
-    ctx = min(args.context, caps["max_context"] or args.context)
+    if args.context == "auto":
+        if args.backend == "ollama":
+            ctx = await resolve_auto_context(
+                client, model, caps, note=lambda s: print(f"{DIM}{s}{RESET}")
+            )
+        else:
+            # llama.cpp and LM Studio size the window at their own launch;
+            # nothing this side can measure or change. Turbo never reaches
+            # here -- it resolved "auto" before launching.
+            ctx = DEFAULT_CONTEXT
+            print(f"{DIM}--context auto is Ollama-only; using {ctx:,} for the budget{RESET}")
+    else:
+        ctx = int(args.context)
+    ctx = min(ctx, caps["max_context"] or ctx)
 
     interactive = sys.stdin.isatty() and not args.prompt
     ws_path, restored = resolve_workspace(

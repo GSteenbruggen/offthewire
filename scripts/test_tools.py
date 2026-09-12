@@ -464,11 +464,42 @@ def test_midturn_compaction_uncapped() -> None:
           f"{client.chats} calls")
 
 
+def test_output_budget() -> None:
+    """Tool results truncate at a share of the window, floored at the
+    historical 12k chars so small windows behave as they always did."""
+    print("\n9. Tool output budget follows the window")
+    import tools
+    from tools import (
+        MAX_OUTPUT_CHARS_CEILING, MIN_OUTPUT_CHARS, output_budget_chars, set_output_budget,
+    )
+
+    check("32k keeps the historical 12k floor", output_budget_chars(32768) == MIN_OUTPUT_CHARS)
+    check("48k grows", output_budget_chars(49152) > MIN_OUTPUT_CHARS,
+          str(output_budget_chars(49152)))
+    check("128k grows further but stays under the ceiling",
+          MIN_OUTPUT_CHARS < output_budget_chars(131072) <= MAX_OUTPUT_CHARS_CEILING,
+          str(output_budget_chars(131072)))
+    check("256k hits the ceiling", output_budget_chars(262144) == MAX_OUTPUT_CHARS_CEILING)
+
+    original = tools.MAX_OUTPUT_CHARS
+    try:
+        set_output_budget(131072)
+        big = "x" * (MIN_OUTPUT_CHARS + 5000)
+        check("_truncate reads the live limit, not an import-time default",
+              tools._truncate(big) == big)
+        set_output_budget(32768)
+        check("shrinking the window shrinks the result again",
+              "truncated" in tools._truncate(big))
+    finally:
+        tools.MAX_OUTPUT_CHARS = original
+
+
 def main() -> int:
     print("=" * 68)
     print("WORKSPACE AND COMMAND TESTS")
     print("=" * 68)
     test_confinement()
+    test_output_budget()
     test_run_command_basics()
     test_cancellation_kills_the_tree()
     test_timeout_kills_the_tree()

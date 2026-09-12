@@ -32,9 +32,35 @@ import images as IM
 # the right neighbourhood.
 CHARS_PER_TOKEN = 3.6
 
-# Start compacting here rather than at 100% -- the model still needs room to
-# generate a reply, and tool results can arrive in large chunks.
-COMPACT_AT = 0.75
+# Compaction keeps a *reserve* free rather than firing at a fixed share of
+# the window. The check runs before a request is sent, so whatever lands
+# before the next check -- one reply, then one tool result -- must fit in
+# what is left. Neither grows with the window on its own: a reply with
+# thinking on is a few thousand tokens at any window, and a tool result is
+# capped by tools.output_budget_chars, which this reserve is derived from
+# so the two can never disagree. The original 75% ratio reserved 8k on 32k,
+# 12k on 48k, and would have idled 64k of a 256k window for no reason.
+COMPACT_REPLY_RESERVE = 4096
+COMPACT_RESERVE_TOKENS = 8192  # floor: the historical 32k-window reserve
+# Windows too small for the reserve to make sense (tests, tiny models) never
+# compact below half the window.
+COMPACT_MIN_RATIO = 0.5
+
+
+def compact_reserve(context_limit: int) -> int:
+    """Tokens kept free below the window: one reply plus one tool result."""
+    from tools import output_budget_chars
+
+    one_result = int(output_budget_chars(context_limit) / CHARS_PER_TOKEN)
+    return max(COMPACT_RESERVE_TOKENS, COMPACT_REPLY_RESERVE + one_result)
+
+
+def compact_threshold(context_limit: int) -> int:
+    """Token count at which a session of this window compacts."""
+    return max(
+        int(context_limit * COMPACT_MIN_RATIO),
+        context_limit - compact_reserve(context_limit),
+    )
 
 # Never compact away the most recent exchanges; that is the working set.
 KEEP_RECENT_MESSAGES = 6
@@ -233,7 +259,10 @@ class Session:
         return self.used_tokens() / max(1, self.context_limit)
 
     def needs_compaction(self) -> bool:
-        return self.usage_ratio() >= COMPACT_AT
+        return self.used_tokens() >= self.compact_threshold()
+
+    def compact_threshold(self) -> int:
+        return compact_threshold(self.context_limit)
 
     def budget_line(self) -> str:
         used = self.used_tokens()

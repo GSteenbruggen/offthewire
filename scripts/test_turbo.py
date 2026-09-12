@@ -20,8 +20,8 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "src"))
 
 from turbo import (  # noqa: E402
-    TurboError, estimate_gpu_layers, installed_manifest_names, model_facts,
-    read_gguf_metadata, resolve_gguf,
+    TURBO_PER_EXTRA_GPU, TurboError, estimate_gpu_layers, installed_manifest_names,
+    model_facts, parse_tensor_split, read_gguf_metadata, resolve_gguf,
 )
 
 PASS, FAIL = "  [PASS]", "  [FAIL]"
@@ -76,7 +76,10 @@ def test_gguf_reader() -> None:
 
     facts = model_facts(f)
     check("facts extracted by architecture",
-          facts == {"architecture": "qwen35", "block_count": 62, "mtp_layers": 1})
+          facts["architecture"] == "qwen35" and facts["block_count"] == 62
+          and facts["mtp_layers"] == 1, str(facts))
+    check("no attention fields -> no KV estimate, no crash",
+          facts["kv_bytes_per_token"] is None and facts["context_length"] == 0)
 
     plain = root / "plain.gguf"
     make_gguf(plain, [
@@ -121,6 +124,38 @@ def test_layer_fitting() -> None:
     per_layer = 17 * GB / 63
     check("estimate leaves the headroom intact",
           (n * per_layer) <= 16 * GB - 2_900_000_000, f"{n} layers")
+
+    # Two cards pooled: 16 + 12 GB holds the whole 17 GB model, but the
+    # second card is charged its own scratch, so a pool that fits by a
+    # hair on one card does not on two.
+    pooled = estimate_gpu_layers(17 * GB, 62, 28 * GB, n_gpus=2)
+    check("pooled cards offload fully", pooled == 63, f"{pooled} layers")
+    one_card = estimate_gpu_layers(10 * GB, 62, 13 * GB, n_gpus=1)
+    two_cards = estimate_gpu_layers(10 * GB, 62, 13 * GB, n_gpus=2)
+    check("an extra card costs its own scratch",
+          two_cards < one_card, f"{one_card} vs {two_cards}")
+    check("scratch charged is exactly the per-card constant",
+          (one_card - two_cards) * per_layer * (63 / 62) >= 0
+          and abs((one_card - two_cards) - TURBO_PER_EXTRA_GPU / (10 * GB / 63)) < 1.5,
+          f"{one_card - two_cards} layers")
+    # A window above the 32k the base headroom covers reserves its KV cache.
+    with_kv = estimate_gpu_layers(17 * GB, 62, 28 * GB, n_gpus=2, kv_bytes=9 * GB)
+    check("KV cache beyond the base window comes out of the layer budget",
+          with_kv < pooled, f"{with_kv} layers")
+
+
+def test_tensor_split() -> None:
+    print("\n2b. --tensor-split validation")
+    check("unset passes through", parse_tensor_split(None) is None)
+    check("blank is unset", parse_tensor_split("  ") is None)
+    check("proportions kept verbatim", parse_tensor_split("3,2") == "3,2")
+    check("decimals allowed", parse_tensor_split("0.6, 0.4") == "0.6,0.4")
+    for bad in ("3", "a,b", "-1,2", "0,0"):
+        try:
+            parse_tensor_split(bad)
+            check(f"{bad!r} refused", False, "accepted")
+        except TurboError:
+            check(f"{bad!r} refused", True)
 
 
 def test_manifest_resolution() -> None:
@@ -175,6 +210,7 @@ def main() -> int:
     print("=" * 68)
     test_gguf_reader()
     test_layer_fitting()
+    test_tensor_split()
     test_manifest_resolution()
     print("\n" + "=" * 68)
     print("All turbo tests passed." if not failures else f"{failures} FAILED.")

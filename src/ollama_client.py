@@ -381,7 +381,7 @@ class OllamaClient:
 
     async def unload(self, model: str) -> dict[str, Any]:
         """Evict a model. ``keep_alive: 0`` frees the VRAM immediately, which
-        matters on a 16GB card holding a 17GB model."""
+        matters when the next model to load only fits with this one gone."""
         async with self._client() as c:
             r = await c.post(
                 "/api/chat", json={"model": model, "messages": [], "keep_alive": 0}

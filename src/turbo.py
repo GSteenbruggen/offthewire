@@ -36,10 +36,19 @@ from typing import Any, Callable
 
 import paths
 
-# Reserve for the KV cache, compute buffers and the desktop compositor when
-# fitting layers. Deliberately conservative: a too-low -ngl costs a little
-# speed, a too-high one crashes the server at load.
+# Reserve for compute buffers, the desktop compositor and a 32k q8_0 KV cache
+# when fitting layers. Deliberately conservative: a too-low -ngl costs a
+# little speed, a too-high one crashes the server at load.
 TURBO_VRAM_HEADROOM = 3_000_000_000
+
+# Each card past the first needs its own compute buffer and split-point
+# scratch (measured ~330 MB per card on the reference machine), but not the
+# desktop, which lives on the display card only. Pooling VRAM across cards
+# without charging this would over-offload by roughly one layer per card.
+TURBO_PER_EXTRA_GPU = 750_000_000
+
+# llama-server's KV cache quantization in turbo mode: one byte per element.
+TURBO_KV_CACHE_BYTES = 1
 
 # Ports tried in order. 8080 is deliberately absent -- the SearXNG container
 # owns it on machines with web lookup installed.
@@ -113,13 +122,18 @@ def read_gguf_metadata(path: Path, max_array: int = 64) -> dict[str, Any]:
 
 
 def model_facts(gguf: Path) -> dict[str, Any]:
-    """The three metadata facts turbo mode decides by."""
+    """The metadata facts turbo mode decides by."""
+    from models import kv_bytes_per_token
+
     meta = read_gguf_metadata(gguf)
     arch = meta.get("general.architecture", "")
     return {
         "architecture": arch,
         "block_count": meta.get(f"{arch}.block_count", 0),
         "mtp_layers": meta.get(f"{arch}.nextn_predict_layers", 0),
+        "context_length": meta.get(f"{arch}.context_length", 0),
+        # Per-token KV cost at the q8_0 cache the launcher always sets.
+        "kv_bytes_per_token": kv_bytes_per_token(meta, cache_bytes=TURBO_KV_CACHE_BYTES),
     }
 
 
@@ -237,6 +251,8 @@ def cuda_environment(server: Path) -> dict[str, str]:
 def estimate_gpu_layers(
     model_bytes: int, block_count: int, vram_bytes: int | None,
     headroom: int = TURBO_VRAM_HEADROOM,
+    n_gpus: int = 1,
+    kv_bytes: int = 0,
 ) -> int | None:
     """How many layers fit in measured VRAM; None when VRAM is unknown.
 
@@ -244,14 +260,43 @@ def estimate_gpu_layers(
     output layer counted as one more). Conservative headroom, because the
     failure modes are asymmetric -- a few layers too few is slightly slower,
     one too many is a crash at load.
+
+    ``vram_bytes`` is the pool across ``n_gpus`` cards; every card past the
+    first is charged its own scratch. ``kv_bytes`` is the KV cache beyond
+    the 32k the base headroom already covers, for windows chosen larger.
     """
     if not vram_bytes or not block_count or not model_bytes:
         return None
     per_layer = model_bytes / (block_count + 1)
-    usable = vram_bytes - headroom
+    reserved = headroom + TURBO_PER_EXTRA_GPU * max(0, n_gpus - 1) + max(0, kv_bytes)
+    usable = vram_bytes - reserved
     if usable <= 0:
         return 0
     return min(block_count + 1, int(usable / per_layer))
+
+
+def parse_tensor_split(text: str | None) -> str | None:
+    """Validate a ``--tensor-split`` proportion list like ``3,2``; None if unset.
+
+    Checked here so a typo fails with a sentence before a 17 GB load, not
+    with llama-server exiting mid-load and a log to dig through.
+    """
+    if text is None or not text.strip():
+        return None
+    parts = [p.strip() for p in text.split(",")]
+    try:
+        values = [float(p) for p in parts]
+    except ValueError:
+        raise TurboError(
+            f"--tensor-split expects comma-separated numbers, one per GPU "
+            f"(e.g. 3,2 for 60/40); got {text!r}"
+        )
+    if len(values) < 2 or any(v < 0 for v in values) or sum(values) <= 0:
+        raise TurboError(
+            f"--tensor-split needs at least two non-negative proportions with "
+            f"a positive total; got {text!r}"
+        )
+    return ",".join(p for p in parts)
 
 
 # ----------------------------------------------------------------- launching
@@ -286,9 +331,9 @@ async def free_port() -> int:
     )
 
 
-def free_vram_bytes() -> int | None:
-    """Currently unused VRAM across NVIDIA GPUs, or None when unreadable."""
-    from models import parse_vram_readings
+def free_vram_per_gpu() -> list[int]:
+    """Currently unused VRAM per NVIDIA GPU in device order; empty if unreadable."""
+    from models import parse_vram_per_gpu
 
     try:
         proc = subprocess.run(
@@ -296,10 +341,16 @@ def free_vram_bytes() -> int | None:
             capture_output=True, text=True, timeout=5,
         )
     except (OSError, subprocess.TimeoutExpired):
-        return None
+        return []
     if proc.returncode != 0:
-        return None
-    return parse_vram_readings(proc.stdout)
+        return []
+    return parse_vram_per_gpu(proc.stdout)
+
+
+def free_vram_bytes() -> int | None:
+    """Currently unused VRAM across NVIDIA GPUs, or None when unreadable."""
+    readings = free_vram_per_gpu()
+    return sum(readings) if readings else None
 
 
 async def free_the_gpu(needed_bytes: int, note: Callable[[str], None]) -> bool:
@@ -342,6 +393,7 @@ class TurboServer:
     gpu_layers: int | None
     speculative: bool
     log_path: Path
+    context: int = 32768
     process: Any = field(default=None, repr=False)
 
     def stop(self) -> None:
@@ -373,27 +425,50 @@ def _log_tail(log_path: Path, lines: int = 12) -> str:
 async def launch_turbo(
     model: str,
     *,
-    context: int = 32768,
+    context: int | str = 32768,
     gpu_layers: int | None = None,
+    tensor_split: str | None = None,
+    main_gpu: int | None = None,
     note: Callable[[str], None] = print,
 ) -> TurboServer:
-    """Resolve, configure, launch, and wait for health. The whole runbook."""
+    """Resolve, configure, launch, and wait for health. The whole runbook.
+
+    ``context`` may be the string ``"auto"``: the largest ladder rung whose
+    q8_0 KV cache fits in VRAM alongside the weights, from the GGUF header.
+    The server sizes its window at launch, so unlike the Ollama path there
+    is no load-and-check loop -- the estimate is the decision.
+    """
+    from models import CONTEXT_FLOOR, fit_context, total_vram_bytes
+
     server = find_llama_server()
     gguf = resolve_gguf(model)
     facts = model_facts(gguf)
     gguf_bytes = gguf.stat().st_size
     speculative = facts["mtp_layers"] >= 1
+    split = parse_tensor_split(tensor_split)
     port = await free_port()
     evicted = await free_the_gpu(gguf_bytes, note)
 
-    if gpu_layers is None:
-        from models import total_vram_bytes
+    # After an eviction the freed memory takes a moment to show up in
+    # nvidia-smi, so budget against the whole card; otherwise fit into
+    # what is actually free alongside whoever else is resident.
+    per_gpu = free_vram_per_gpu()
+    vram = total_vram_bytes() if evicted else (sum(per_gpu) or total_vram_bytes())
+    n_gpus = max(1, len(per_gpu))
 
-        # After an eviction the freed memory takes a moment to show up in
-        # nvidia-smi, so budget against the whole card; otherwise fit into
-        # what is actually free alongside whoever else is resident.
-        vram = total_vram_bytes() if evicted else (free_vram_bytes() or total_vram_bytes())
-        gpu_layers = estimate_gpu_layers(gguf_bytes, facts["block_count"], vram)
+    if context == "auto":
+        context = fit_context(
+            gguf_bytes, facts["kv_bytes_per_token"], vram,
+            ceiling=facts["context_length"] or None, n_gpus=n_gpus,
+        )
+        note(f"context auto → {context:,} tokens (q8_0 KV cache fit to VRAM)")
+    context = int(context)
+
+    if gpu_layers is None:
+        kv_beyond_base = (facts["kv_bytes_per_token"] or 0) * max(0, context - CONTEXT_FLOOR)
+        gpu_layers = estimate_gpu_layers(
+            gguf_bytes, facts["block_count"], vram, n_gpus=n_gpus, kv_bytes=kv_beyond_base,
+        )
 
     cmd = [
         str(server), "-m", str(gguf),
@@ -407,6 +482,10 @@ async def launch_turbo(
     ]
     if gpu_layers is not None:
         cmd += ["-ngl", str(gpu_layers)]
+    if split is not None:
+        cmd += ["--tensor-split", split]
+    if main_gpu is not None:
+        cmd += ["--main-gpu", str(main_gpu)]
     if speculative:
         cmd += ["--spec-type", "draft-mtp"]
 
@@ -420,6 +499,11 @@ async def launch_turbo(
         layers_note = "all layers on GPU"
     else:
         layers_note = f"{gpu_layers}/{facts['block_count'] or '?'} layers on GPU"
+    if n_gpus > 1:
+        placement = f"split {split}" if split else "split by free memory"
+        if main_gpu is not None:
+            placement += f", main GPU {main_gpu}"
+        layers_note += f" across {n_gpus} cards ({placement})"
     note(
         f"turbo: {gguf.name[:19]}… · {layers_note} · "
         f"speculative decoding {'on (MTP head)' if speculative else 'off (no MTP head)'} · "
@@ -446,6 +530,7 @@ async def launch_turbo(
         gpu_layers=gpu_layers,
         speculative=speculative,
         log_path=log_path,
+        context=context,
         process=process,
     )
 

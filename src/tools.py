@@ -34,10 +34,37 @@ import ui as _ui
 
 IS_WINDOWS = os.name == "nt"
 
-MAX_OUTPUT_CHARS = 12_000
+# Tool results truncate at a share of the context window rather than a fixed
+# size: 12,000 chars was sized for the 32k window the project started on and
+# is roughly 10% of it. A machine that can hold 128k should get a larger
+# read_file, not the same slice with more empty room around it. The floor
+# keeps the historical behaviour on small windows; the ceiling stops a huge
+# window from turning one shell command into a 100k-token result.
+OUTPUT_FRACTION_OF_CONTEXT = 0.10
+MIN_OUTPUT_CHARS = 12_000
+MAX_OUTPUT_CHARS_CEILING = 64_000
+MAX_OUTPUT_CHARS = MIN_OUTPUT_CHARS
 MAX_GREP_HITS = 60
 MAX_GLOB_HITS = 200
 SHELL_TIMEOUT = 120
+
+
+def output_budget_chars(context_tokens: int, chars_per_token: float = 3.6) -> int:
+    """Truncation limit for tool results at a given window. Pure, for tests."""
+    share = int(context_tokens * chars_per_token * OUTPUT_FRACTION_OF_CONTEXT)
+    return max(MIN_OUTPUT_CHARS, min(MAX_OUTPUT_CHARS_CEILING, share))
+
+
+def set_output_budget(context_tokens: int) -> int:
+    """Size tool-result truncation to the session's window; returns the limit.
+
+    Module state on purpose: every tool goes through _truncate, and threading
+    a limit through each tool's signature would change the interface the
+    model sees for something that is a property of the session, not the call.
+    """
+    global MAX_OUTPUT_CHARS
+    MAX_OUTPUT_CHARS = output_budget_chars(context_tokens)
+    return MAX_OUTPUT_CHARS
 
 SKIP_DIRS = {
     ".git", ".venv", "venv", "node_modules", "__pycache__", ".mypy_cache",
@@ -45,7 +72,10 @@ SKIP_DIRS = {
 }
 
 
-def _truncate(text: str, limit: int = MAX_OUTPUT_CHARS) -> str:
+def _truncate(text: str, limit: int | None = None) -> str:
+    # Looked up at call time, not bound as a default: set_output_budget can
+    # change it after this module is imported.
+    limit = MAX_OUTPUT_CHARS if limit is None else limit
     if len(text) <= limit:
         return text
     cut = text[:limit]

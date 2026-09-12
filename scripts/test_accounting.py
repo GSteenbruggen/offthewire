@@ -311,6 +311,34 @@ def test_multipass_compaction() -> None:
           result[:90])
 
 
+def test_compaction_threshold() -> None:
+    """The reserve is absolute: what one reply plus one tool result can add
+    before the next check does not grow with the window, so neither should
+    the room kept for it. The ratio only backstops small windows."""
+    print("\n9. Compaction threshold is an absolute reserve")
+    from session import (
+        CHARS_PER_TOKEN, COMPACT_MIN_RATIO, COMPACT_REPLY_RESERVE,
+        COMPACT_RESERVE_TOKENS, compact_reserve, compact_threshold,
+    )
+    from tools import output_budget_chars
+
+    check("32k keeps the historical 8k reserve",
+          compact_reserve(32768) == COMPACT_RESERVE_TOKENS, str(compact_reserve(32768)))
+    for limit in (49152, 65536, 131072, 262144):
+        reserve = compact_reserve(limit)
+        expected = COMPACT_REPLY_RESERVE + int(output_budget_chars(limit) / CHARS_PER_TOKEN)
+        check(f"{limit:,}: reserve is one reply plus one max tool result ({reserve:,})",
+              reserve == expected and compact_threshold(limit) == limit - reserve,
+              f"expected {expected:,}")
+    check("above the floor the reserve is under a fifth of the window",
+          all(compact_reserve(w) < w * 0.2 for w in (49152, 65536, 131072, 262144)))
+    check("48k: the old 75% idled 12k; now it is under 10k",
+          49152 - compact_threshold(49152) < 10_000,
+          f"{49152 - compact_threshold(49152):,} reserved")
+    check("a tiny window never compacts below half",
+          compact_threshold(8000) == int(8000 * COMPACT_MIN_RATIO))
+
+
 def test_retroactive_save() -> None:
     """/savesession: a conversation started unsaved becomes saved, whole.
 
@@ -379,6 +407,7 @@ def main() -> int:
         test_dangling_tool_call(tmp)
         test_session_lookup(tmp)
         test_multipass_compaction()
+        test_compaction_threshold()
         test_retroactive_save()
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
