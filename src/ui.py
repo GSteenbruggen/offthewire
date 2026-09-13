@@ -371,6 +371,23 @@ def approval(title: str) -> str:
     return input("  > ")
 
 
+def approval_read_outside(path: str) -> str:
+    """Approval prompt for reading one path outside the workspace.
+
+    Two options, on purpose. The mutating-tool prompt offers "stop asking
+    this session"; this one never does, because a standing grant to read
+    anywhere would silently undo the workspace boundary. Each outside read
+    is its own question, and the answer covers that path once.
+    """
+    console.print()
+    _choice_box(
+        f"read outside the workspace?  {path}",
+        ["yes, read it this once", "no"],
+        "1/2, or y/n · read-only; nothing outside the workspace is ever written",
+    )
+    return input("  > ")
+
+
 # ------------------------------------------------------------------ spinner
 
 

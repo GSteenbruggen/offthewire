@@ -97,12 +97,21 @@ class Tool:
 
 
 class Workspace:
-    """Filesystem access confined to one root directory."""
+    """Filesystem access confined to one root directory.
+
+    Writes never leave the root. Reads may, one path at a time, and only
+    after the user has said yes to that exact path: the agent loop asks,
+    then records a single-use grant here, and the read consumes it. There
+    is deliberately no "always" -- a model that has learned it can read
+    anywhere is a model that will, and the whole point of the root is that
+    the user knows what it can see.
+    """
 
     def __init__(self, root: str | Path):
         self.root = Path(root).resolve()
         if not self.root.is_dir():
             raise ValueError(f"workspace root is not a directory: {self.root}")
+        self._read_grants: set[Path] = set()
 
     def change_root(self, root: str | Path) -> Path:
         """Re-point the workspace at a different directory, mid-session.
@@ -118,16 +127,40 @@ class Workspace:
         self.root = new_root
         return self.root
 
-    def resolve(self, path: str) -> Path:
+    def locate(self, path: str) -> Path:
+        """Where a path really points, symlinks and dots resolved. No
+        containment check -- that is resolve()'s job; this exists so the
+        agent loop can see that a read is headed outside *before* running
+        it, and ask."""
         p = Path(path)
         p = p if p.is_absolute() else self.root / p
-        p = p.resolve()
-        # containment check; note Path.is_relative_to is 3.9+
-        if not p.is_relative_to(self.root):
+        return p.resolve()
+
+    def contains(self, p: Path) -> bool:
+        # note Path.is_relative_to is 3.9+
+        return p.is_relative_to(self.root)
+
+    def grant_read(self, p: Path) -> None:
+        """Allow exactly one read of one resolved path outside the root."""
+        self._read_grants.add(p)
+
+    def resolve(self, path: str, read: bool = False) -> Path:
+        p = self.locate(path)
+        if self.contains(p):
+            return p
+        if read and p in self._read_grants:
+            # Single use: the next read of the same path asks again.
+            self._read_grants.discard(p)
+            return p
+        if read:
             raise ToolError(
-                f"Path escapes the workspace root ({self.root}). Refused: {path}"
+                f"Path is outside the workspace root ({self.root}) and the user "
+                f"has not approved reading it. Refused: {path}"
             )
-        return p
+        raise ToolError(
+            f"Path escapes the workspace root ({self.root}). Refused: {path}. "
+            f"Nothing outside the workspace can be written or edited."
+        )
 
     def rel(self, p: Path) -> str:
         try:
@@ -142,7 +175,7 @@ class Workspace:
 def build_tools(ws: Workspace) -> list[Tool]:
     def read_file(path: str, start_line: int = 1, num_lines: int = 400) -> str:
         """Numbered read. The numbers matter -- edit_lines addresses by them."""
-        p = ws.resolve(path)
+        p = ws.resolve(path, read=True)
         if not p.is_file():
             raise ToolError(f"Not a file: {ws.rel(p)}")
         try:
@@ -213,7 +246,7 @@ def build_tools(ws: Workspace) -> list[Tool]:
         )
 
     def list_dir(path: str = ".") -> str:
-        p = ws.resolve(path)
+        p = ws.resolve(path, read=True)
         if not p.is_dir():
             raise ToolError(f"Not a directory: {ws.rel(p)}")
         entries = []
@@ -387,12 +420,14 @@ def build_tools(ws: Workspace) -> list[Tool]:
             name="read_file",
             description=(
                 "Read a text file with line numbers. Use the line numbers it "
-                "returns when calling edit_lines."
+                "returns when calling edit_lines. A path outside the workspace "
+                "is allowed only for reading and only with the user's approval, "
+                "asked for every such call."
             ),
             parameters={
                 "type": "object",
                 "properties": {
-                    "path": {"type": "string", "description": "File path relative to the workspace."},
+                    "path": {"type": "string", "description": "File path relative to the workspace, or an absolute path outside it (read-only, user-approved each time)."},
                     "start_line": {"type": "integer", "description": "First line to read. Default 1."},
                     "num_lines": {"type": "integer", "description": "How many lines. Default 400."},
                 },
@@ -435,7 +470,10 @@ def build_tools(ws: Workspace) -> list[Tool]:
         ),
         Tool(
             name="list_dir",
-            description="List files and folders in a directory.",
+            description=(
+                "List files and folders in a directory. A directory outside the "
+                "workspace needs the user's approval, asked for every such call."
+            ),
             parameters={
                 "type": "object",
                 "properties": {
@@ -498,6 +536,12 @@ def build_tools(ws: Workspace) -> list[Tool]:
     ]
 
 
+# The only tools that may be pointed outside the workspace, and only to look.
+# find_files and search_text walk the root and cannot be aimed elsewhere;
+# every writing tool refuses outside paths outright.
+OUTSIDE_READ_TOOLS = ("read_file", "list_dir")
+
+
 class ToolRegistry:
     def __init__(self, workspace: Workspace):
         self.workspace = workspace
@@ -505,6 +549,20 @@ class ToolRegistry:
 
     def __contains__(self, name: str) -> bool:
         return name in self._tools
+
+    def outside_read_target(self, name: str, args: dict[str, Any]) -> Path | None:
+        """The resolved path a read-only call would touch outside the
+        workspace, or None when the call stays inside (or is not a read)."""
+        if name not in OUTSIDE_READ_TOOLS:
+            return None
+        raw = args.get("path")
+        if not isinstance(raw, str) or not raw:
+            return None
+        try:
+            p = self.workspace.locate(raw)
+        except (OSError, ValueError):
+            return None
+        return None if self.workspace.contains(p) else p
 
     def get(self, name: str) -> Tool | None:
         return self._tools.get(name)

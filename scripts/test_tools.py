@@ -97,6 +97,114 @@ def test_confinement() -> None:
         check("symlink escape refused", refused(ws, "sneaky/loot.txt"))
 
 
+def test_outside_reads() -> None:
+    """Reads may leave the root one approved path at a time; writes never.
+
+    The grant is single-use and per path: a second read of the same file
+    asks again, a different file asks separately, and no grant of any kind
+    unlocks write_file or edit_lines outside the root.
+    """
+    print("\n1b. Outside reads: per-path, single-use, read-only")
+
+    root = Path(tempfile.mkdtemp(prefix="otw-jail-"))
+    outside = Path(tempfile.mkdtemp(prefix="otw-outside-"))
+    loot = outside / "loot.txt"
+    loot.write_text("secret")
+    ws = Workspace(root)
+    reg = ToolRegistry(ws)
+
+    def read_refused(path: str) -> bool:
+        try:
+            ws.resolve(path, read=True)
+            return False
+        except ToolError:
+            return True
+
+    check("outside read refused with no grant", read_refused(str(loot)))
+    check("registry spots the outside target",
+          reg.outside_read_target("read_file", {"path": str(loot)}) == loot.resolve())
+    check("inside target is not flagged",
+          reg.outside_read_target("read_file", {"path": "a.txt"}) is None)
+    check("writing tools are never candidates for an outside grant",
+          reg.outside_read_target("write_file", {"path": str(loot)}) is None
+          and reg.outside_read_target("edit_lines", {"path": str(loot)}) is None)
+    check("search tools stay inside by construction",
+          reg.outside_read_target("search_text", {"pattern": "x"}) is None)
+
+    ws.grant_read(loot.resolve())
+    check("granted read resolves once", ws.resolve(str(loot), read=True) == loot.resolve())
+    check("the grant is spent by that read", read_refused(str(loot)))
+    ws.grant_read(loot.resolve())
+    check("a grant for one file does not cover its neighbour",
+          read_refused(str(outside / "other.txt")))
+    check("a read grant never unlocks a write", refused(ws, str(loot)))
+    ws.resolve(str(loot), read=True)  # spend it
+
+    ws.grant_read(loot.resolve())
+    out = asyncio.run(reg.call("read_file", {"path": str(loot)}))
+    check("read_file returns the outside content once granted", "secret" in out, out[:60])
+    out = asyncio.run(reg.call("read_file", {"path": str(loot)}))
+    check("the next read_file of the same path is refused again",
+          out.startswith("ERROR") and "not approved" in out, out[:80])
+    out = asyncio.run(reg.call("write_file", {"path": str(loot), "content": "x"}))
+    check("write_file outside is refused regardless", out.startswith("ERROR"), out[:80])
+    check("the outside file is untouched", loot.read_text() == "secret")
+
+
+def test_outside_read_prompt() -> None:
+    """The prompt accepts only an explicit yes. 'a' -- the mutating prompt's
+    "always" -- must be a no here, and a non-interactive run never asks."""
+    print("\n1c. Outside-read approval: no 'always', no unattended yes")
+    import ui
+    from agent import Agent
+
+    root = Path(tempfile.mkdtemp(prefix="otw-jail-"))
+    outside = Path(tempfile.mkdtemp(prefix="otw-outside-"))
+    loot = (outside / "loot.txt").resolve()
+    loot.write_text("secret")
+
+    class NullClient:
+        pass
+
+    original = ui.approval_read_outside
+    try:
+        for answer, expected in (
+            ("y", True), ("yes", True), ("1", True),
+            ("n", False), ("2", False), ("", False),
+            ("a", False), ("always", False), ("3", False),
+        ):
+            agent = Agent(NullClient(), "m", Workspace(root), interactive=True,
+                          auto_approve=True)  # --yes must not bypass this
+            ui.approval_read_outside = lambda _p, _a=answer: _a
+            got = agent.approve_outside_read("read_file", loot)
+            check(f"answer {answer!r} -> {'allowed' if expected else 'refused'}",
+                  got == expected)
+            if expected:
+                check("  yes leaves exactly one grant, spent by one read",
+                      agent.tools.workspace.resolve(str(loot), read=True) == loot
+                      and not _can_read(agent.tools.workspace, loot))
+            else:
+                check("  no leaves no grant behind",
+                      not _can_read(agent.tools.workspace, loot))
+
+        agent = Agent(NullClient(), "m", Workspace(root), interactive=False,
+                      auto_approve=True)
+        ui.approval_read_outside = lambda _p: "y"  # must never be reached
+        check("non-interactive run refuses without asking",
+              agent.approve_outside_read("read_file", loot) is False
+              and not _can_read(agent.tools.workspace, loot))
+    finally:
+        ui.approval_read_outside = original
+
+
+def _can_read(ws: Workspace, p: Path) -> bool:
+    try:
+        ws.resolve(str(p), read=True)
+        return True
+    except ToolError:
+        return False
+
+
 def test_run_command_basics() -> None:
     print("\n2. run_command basics")
 
@@ -499,6 +607,8 @@ def main() -> int:
     print("WORKSPACE AND COMMAND TESTS")
     print("=" * 68)
     test_confinement()
+    test_outside_reads()
+    test_outside_read_prompt()
     test_output_budget()
     test_run_command_basics()
     test_cancellation_kills_the_tree()

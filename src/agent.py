@@ -79,6 +79,11 @@ Rules:
 - Take one step at a time. Call a tool, look at the actual result, then decide.
 - If a tool returns ERROR, read why and fix your call. Do not repeat it unchanged.
 - Make the smallest edit that does the job. Do not rewrite files wholesale.
+- Your tools are confined to the workspace. read_file and list_dir may be
+  given a path outside it -- a dependency's source, a config the project
+  reads -- but each such call asks the user for approval, one path at a
+  time, and nothing outside the workspace can ever be written or edited.
+  Reach outside only when the task genuinely needs it, and say why.
 - When the task is done, say so plainly and stop calling tools.
 - If a request is ambiguous in a way that changes what you would write, call
   ask_user rather than guessing. Ask early, before writing code on a guess --
@@ -379,6 +384,7 @@ class Agent:
         self.web = web
         self.supports_vision = supports_vision
         self.save = save
+        self.interactive = interactive
         self.interrupter = Interrupter()
 
         # Only offer to ask questions when somebody is there to answer. In a
@@ -461,6 +467,29 @@ class Agent:
             ui.note("auto-approving for the rest of this session")
             return True
         return answer in ("1", "y", "yes")
+
+    def approve_outside_read(self, tool_name: str, target: Path) -> bool:
+        """Ask before a read-only tool looks outside the workspace.
+
+        Unlike approve(), nothing bypasses this: not --yes, not /approve,
+        not a previous yes for the same path. Each call is one question
+        about one path, and a yes is spent by the read it allows. With
+        nobody at the keyboard (--prompt, a pipe) the answer is no, because
+        a boundary that silently opens when unattended is not a boundary.
+        """
+        if not self.interactive:
+            ui.warn(f"{tool_name} wanted {target} — outside the workspace; refused (no one to ask)")
+            return False
+        try:
+            answer = clean_input(ui.approval_read_outside(str(target))).strip().lower()
+        except (EOFError, KeyboardInterrupt):
+            return False
+        # Only an explicit yes counts. "a"/"always" is deliberately not an
+        # option here; it falls through to no like any other answer.
+        if answer in ("1", "y", "yes"):
+            self.tools.workspace.grant_read(target)
+            return True
+        return False
 
     # ------------------------------------------------------------- main loop
 
@@ -1106,6 +1135,16 @@ class Agent:
                     )
                     ui.warn(f"repeated call #{repeats} — not re-running")
                     last_tool_failed = True
+                elif (
+                    (outside := self.tools.outside_read_target(name, raw_args)) is not None
+                    and not self.approve_outside_read(name, outside)
+                ):
+                    output = (
+                        f"ERROR: the user declined reading outside the workspace "
+                        f"({outside}). Work within the workspace, or ask them to "
+                        f"copy what you need into it."
+                    )
+                    ui.denied(name)
                 elif not self.approve(name, raw_args):
                     output = "ERROR: the user declined this action. Try a different approach or ask them."
                     ui.denied(name)

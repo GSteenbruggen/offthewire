@@ -461,11 +461,20 @@ services — including Ollama's own unauthenticated API.
 **Mutating operations require approval.** File writes, edits, and shell
 commands prompt before executing unless `--yes` is passed. The full content
 of every file write is displayed before it runs, even under `--yes`.
+Reading outside the workspace is a separate, stricter prompt — see below.
 
 **Workspace confinement.** File tools resolve paths (including symlinks and
-relative components) before checking containment; anything resolving outside
-the workspace root is refused. `run_command` is intentionally not confined
-beyond its working directory and is gated by approval instead.
+relative components) before checking containment. Writes and edits that
+resolve outside the workspace root are refused outright. Reads may leave
+the root — a dependency's source, a config the project loads — but only
+through `read_file` and `list_dir`, and only after a yes/no prompt for
+that exact path. The prompt has no "always" option, on purpose: a yes
+covers one read of one path and is spent by it, so the next read of the
+same file asks again. `--yes` and `/approve` do not bypass it, and a
+non-interactive run (`--prompt`, a pipe) refuses without asking.
+`find_files` and `search_text` walk the root and cannot be aimed elsewhere.
+`run_command` is intentionally not confined beyond its working directory
+and is gated by approval instead.
 
 **Residual risks.** Prompt injection is inherent to any agent that reads
 files and web pages; the approval gate is the mitigation. The installer is
