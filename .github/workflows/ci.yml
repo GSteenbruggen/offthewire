@@ -69,8 +69,10 @@ jobs:
         # whole import graph without needing Ollama.
         run: installer/dist/OffTheWire/OffTheWire --help
       - name: Package
+        # update.sh rides along so an extracted tarball can update itself.
         run: |
           VERSION=$(grep -oE 'AppVersion +"[0-9.]+"' installer/OffTheWire.iss | grep -oE '[0-9.]+')
+          cp scripts/update.sh installer/dist/OffTheWire/
           tar -czf "OffTheWire-${VERSION}-linux-x86_64.tar.gz" \
               -C installer/dist OffTheWire
           echo "TARBALL=OffTheWire-${VERSION}-linux-x86_64.tar.gz" >> "$GITHUB_ENV"
@@ -106,6 +108,7 @@ jobs:
       - name: Package
         run: |
           VERSION=$(grep -oE 'AppVersion +"[0-9.]+"' installer/OffTheWire.iss | grep -oE '[0-9.]+')
+          cp scripts/update.sh installer/dist/OffTheWire/
           tar -czf "OffTheWire-${VERSION}-macos-arm64.tar.gz"               -C installer/dist OffTheWire
           echo "TARBALL=OffTheWire-${VERSION}-macos-arm64.tar.gz" >> "$GITHUB_ENV"
       - uses: actions/upload-artifact@v4

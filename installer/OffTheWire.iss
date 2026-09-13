@@ -81,6 +81,9 @@ Source: "{#SourceDir}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs 
 ; Shipped whether or not the task is ticked, so web lookup can still be set up
 ; later without needing the project source.
 Source: "..\scripts\setup_searxng.ps1"; DestDir: "{app}"; Flags: ignoreversion
+; The updater finds OffTheWire.exe next to itself and fetches the next
+; installer from GitHub. Runs only when the user runs it; no background check.
+Source: "..\scripts\update.ps1"; DestDir: "{app}"; Flags: ignoreversion
 
 [Run]
 ; Config goes to the writable data directory, not {app}: SearXNG needs to write

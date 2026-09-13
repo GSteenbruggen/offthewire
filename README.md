@@ -208,6 +208,35 @@ This writes a launcher shim into `%LOCALAPPDATA%\Microsoft\WindowsApps`,
 which is already on the user `PATH`. The working directory at launch becomes
 the agent's workspace.
 
+### Updating
+
+One script updates whichever kind of install it is run from:
+
+```powershell
+.\scripts\update.ps1                  # source checkout: fast-forward, reinstall deps, re-verify
+.\scripts\update.ps1 -Release         # …to the newest release tag instead of the branch tip
+& "$env:LOCALAPPDATA\Programs\OffTheWire\update.ps1"   # installed build: fetch and run the next installer
+.\scripts\update.ps1 -Check           # either: report only, change nothing
+```
+```bash
+./scripts/update.sh                   # source checkout
+./OffTheWire/update.sh                # extracted tarball: replaces the folder's contents in place
+./scripts/update.sh --check
+```
+
+The installer and tarballs each ship a copy of the script next to the
+binary. A checkout with uncommitted changes is refused rather than
+fast-forwarded over. After updating a checkout the script re-runs
+`verify_offline.py`, so the containment guarantee is re-proven on the new
+code before it is used.
+
+This is one of exactly two things in the project that go online — the
+other is [web lookup](#web-lookup) — and it talks only to `github.com`,
+only when you run it. Nothing in the agent calls it and there is no
+background update check. Downloads are checked against the size the
+release lists, which catches a truncated transfer but is not a signature;
+the builds are unsigned, as noted above.
+
 ---
 
 ## Usage
@@ -446,7 +475,8 @@ validates its address through it at construction. No call site can opt out,
 including via the `OLLAMA_HOST` environment variable or `--host`. Prompts,
 code, and
 files never leave the machine. There is no telemetry, crash reporting, update
-check, or account.
+check, or account. The [update scripts](#updating) reach `github.com`, and
+only when you run them by hand.
 
 **The web channel cannot reach private networks.** When web lookup is
 enabled, every fetched URL is resolved and refused if any resulting address
@@ -836,6 +866,8 @@ scripts/
   setup_searxng.sh    SearXNG container setup, Linux
   install_launcher.sh PATH launcher installation, Linux
   install_launcher.ps1  PATH launcher installation
+  update.ps1          self-update: checkout or installed build (Windows)
+  update.sh           self-update: checkout or extracted tarball (Linux, macOS)
   build_installer.ps1 application and installer build
   show_session.py     saved-session viewer
 .github/workflows/
