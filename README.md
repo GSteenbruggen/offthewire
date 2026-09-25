@@ -96,7 +96,8 @@ pass the full test suite in CI — treat both as beta.
   recovering from errors and disabled for mechanical steps, roughly halving
   wall-clock time on typical agent turns (see [Benchmarks](#benchmarks)).
 - **Context management** — token budget tracked against Ollama's reported
-  counts, with automatic multi-pass compaction at 75% of the window.
+  counts, with automatic multi-pass compaction when the window's reserve
+  is reached.
 - **Image attachments** — paste a screenshot from the clipboard, drag a file
   into the terminal, or reference a path; requires a vision-capable model.
 - **Opt-in persistence** — nothing is written to disk unless `--save` is
@@ -731,8 +732,9 @@ Decisions specific to running agents on small local models:
   silent window.
 - **Token budget is measured, not estimated.** Accounting is calibrated
   against the `prompt_eval_count` Ollama reports; only messages appended
-  since the last response are estimated. Compaction triggers at 75% of the
-  window and summarizes in bounded passes so the summarization prompt itself
+  since the last response are estimated. Compaction triggers when usage
+  reaches the window minus a fixed reserve (one reply plus one tool result)
+  and summarizes in bounded passes so the summarization prompt itself
   always fits the context window. A reply cut off by the window filling
   mid-thought triggers the same compaction automatically, and the model is
   asked to continue where it stopped (once per turn).
