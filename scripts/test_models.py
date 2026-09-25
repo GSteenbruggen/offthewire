@@ -122,6 +122,28 @@ def test_kv_estimate() -> None:
     check("q8_0 cache halves it",
           kv_bytes_per_token(QWEN38_27B, cache_bytes=1) == per_tok // 2)
 
+    # The estimate must follow the user's cache setting, or the auto-context
+    # search starts an f16-sized rung below the room q8_0 actually freed.
+    import os
+
+    from models import kv_cache_bytes
+
+    saved = os.environ.get("OLLAMA_KV_CACHE_TYPE")
+    try:
+        os.environ.pop("OLLAMA_KV_CACHE_TYPE", None)
+        check("no cache setting -> f16 bytes", kv_cache_bytes() == 2.0)
+        os.environ["OLLAMA_KV_CACHE_TYPE"] = "q8_0"
+        check("q8_0 setting -> 1 byte", kv_cache_bytes() == 1.0)
+        os.environ["OLLAMA_KV_CACHE_TYPE"] = "q4_0"
+        check("q4_0 setting -> half a byte", kv_cache_bytes() == 0.5)
+        os.environ["OLLAMA_KV_CACHE_TYPE"] = "something-new"
+        check("unknown setting -> conservative f16", kv_cache_bytes() == 2.0)
+    finally:
+        if saved is None:
+            os.environ.pop("OLLAMA_KV_CACHE_TYPE", None)
+        else:
+            os.environ["OLLAMA_KV_CACHE_TYPE"] = saved
+
     dense = {**QWEN38_27B}
     del dense["qwen35.full_attention_interval"]
     check("dense model counts every layer",

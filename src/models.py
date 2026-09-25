@@ -7,6 +7,7 @@ handed straight back through an MCP tool result.
 
 from __future__ import annotations
 
+import os
 from typing import Any
 
 from ollama_client import GenResult, OllamaClient
@@ -107,7 +108,7 @@ async def model_capabilities(client: OllamaClient, model: str) -> dict[str, Any]
         "parameters": d.get("parameter_size", ""),
         "quantization": d.get("quantization_level", ""),
         "max_context": ctx,
-        "kv_bytes_per_token": kv_bytes_per_token(model_info),
+        "kv_bytes_per_token": kv_bytes_per_token(model_info, kv_cache_bytes()),
         "capabilities": caps,
         "supports_tools": "tools" in caps,
         "supports_thinking": "thinking" in caps,
@@ -115,7 +116,22 @@ async def model_capabilities(client: OllamaClient, model: str) -> dict[str, Any]
     }
 
 
-def kv_bytes_per_token(model_info: dict[str, Any], cache_bytes: int = 2) -> int | None:
+def kv_cache_bytes() -> float:
+    """Bytes per cache element under the user's OLLAMA_KV_CACHE_TYPE.
+
+    The env var configures the *server*, so reading it here is a heuristic
+    about a different process -- which is fine, because this number only
+    decides where on the ladder the auto-context search starts. The verdict
+    is still Ollama's own placement report after loading; a wrong guess
+    costs one step down, never a wrong window. Without this, a user who
+    halves their cache with q8_0 keeps getting f16-sized estimates and the
+    search never starts high enough to find the room they freed.
+    """
+    kind = os.environ.get("OLLAMA_KV_CACHE_TYPE", "").strip().lower()
+    return {"q8_0": 1.0, "q4_0": 0.5}.get(kind, 2.0)
+
+
+def kv_bytes_per_token(model_info: dict[str, Any], cache_bytes: float = 2) -> int | None:
     """KV cache cost per context token, from the model card; None if unknown.
 
     The keys are GGUF metadata as Ollama's /api/show and a raw GGUF header
