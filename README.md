@@ -255,7 +255,7 @@ OffTheWire [workspace] [options]
 | `--gpu-layers N` | With `--turbo`: override the estimated GPU layer count. |
 | `--tensor-split A,B` | With `--turbo` on several GPUs: proportion of layers per card in device order (`3,2` puts 60% on GPU 0). Default splits by free memory. |
 | `--main-gpu N` | With `--turbo` on several GPUs: the card that holds the small tensors and scratch buffers. |
-| `--context N\|auto` | Context window in tokens (`64k` works), capped to the model's maximum. Default 32768. `auto` picks the largest window the model runs fully on GPU at — see [Context window](#context-window). |
+| `--context N\|auto` | Context window in tokens (`64k` works), capped to the model's maximum. Default `auto`: the largest window the model runs fully on GPU at — see [Context window](#context-window). Pass a number for a fixed window. |
 | `--think auto\|always\|never` | When to enable reasoning. Default `auto`. |
 | `--think-level low\|medium\|high\|max\|default` | Reasoning effort when a turn does think. Default `low`; `default` sends a plain boolean for models without effort levels. |
 | `--yes` | Auto-approve file writes and shell commands. |
@@ -331,9 +331,14 @@ reaches its 120 s timeout.
 
 The KV cache grows with the window out of the same VRAM as the weights, so
 the right window is a property of the machine and the model together, and
-no fixed default is right for both a 16 GB card and a 16 + 12 GB pair. The
-default stays at 32768 because it is the floor every machine handles;
-`--context auto` finds the larger number when there is one.
+no fixed default is right for both a 16 GB card and a 16 + 12 GB pair.
+That is why the default is `auto`: the machine is measured and gets the
+largest window it can actually hold, with 32768 as the floor every machine
+handles. Pass `--context N` when a fixed, predictable window matters more
+(the verification load also costs a few seconds of startup that a number
+skips). On the OpenAI-compatible backends, `auto` adopts the window the
+server reports (llama.cpp's `/props`) or falls back to the floor
+(LM Studio, which reports nothing).
 
 `auto` works in two stages. The model card gives the KV cost per token
 (attention layers × KV heads × head size — hybrid architectures such as
@@ -951,8 +956,8 @@ additionally exercises the MCP server against a live Ollama instance.
   third-party MCP servers
 - Parallel tool execution within a step
 - Vision (image attachments) through the llama.cpp and LM Studio backends
-- `--context auto` for the llama.cpp and LM Studio backends (their window
-  is fixed at server launch; only turbo can size it)
+- A window budget read from LM Studio (llama.cpp's is adopted from
+  `/props`; LM Studio reports nothing, so `auto` falls back to the floor)
 
 ---
 

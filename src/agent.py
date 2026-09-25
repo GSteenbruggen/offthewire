@@ -1658,12 +1658,12 @@ async def main() -> int:
     ap.add_argument(
         "--context",
         type=parse_context_arg,
-        default=DEFAULT_CONTEXT,
+        default="auto",
         metavar="N|auto",
-        help=f"Context window in tokens (64k works), or 'auto' to pick the "
+        help="Context window in tokens (64k works), or 'auto' to pick the "
         "largest window the model runs fully on GPU at: estimated from the "
         "model card and measured VRAM, then verified by loading. Default "
-        f"{DEFAULT_CONTEXT}.",
+        "auto; pass a number for a fixed window.",
     )
     ap.add_argument("--think", choices=["auto", "always", "never"], default="auto")
     ap.add_argument(
@@ -1899,10 +1899,14 @@ async def main() -> int:
             )
         else:
             # llama.cpp and LM Studio size the window at their own launch;
-            # nothing this side can measure or change. Turbo never reaches
-            # here -- it resolved "auto" before launching.
-            ctx = DEFAULT_CONTEXT
-            print(f"{DIM}--context auto is Ollama-only; using {ctx:,} for the budget{RESET}")
+            # nothing this side can measure or change. But llama.cpp *says*
+            # what it was launched with (/props n_ctx, already in caps), and
+            # that number is the right budget by definition. LM Studio
+            # reports nothing and gets the floor. Turbo never reaches here
+            # -- it resolved "auto" before launching.
+            ctx = caps.get("max_context") or DEFAULT_CONTEXT
+            source = "the server's window" if caps.get("max_context") else "the floor"
+            print(f"{DIM}context budget {ctx:,} ({source}){RESET}")
     else:
         ctx = int(args.context)
     ctx = min(ctx, caps["max_context"] or ctx)
